@@ -12,7 +12,7 @@ pub struct Theme {
 }
 
 impl Theme {
-    pub fn new(color: bool) -> Self {
+    pub const fn new(color: bool) -> Self {
         if color {
             Self {
                 title: Style::new().bold(),
@@ -146,6 +146,13 @@ pub fn print_feed(entries: &[FeedEntry], offset: usize, t: &Theme) {
 // ── paper ───────────────────────────────────────────────────────────────────
 
 pub fn print_paper(p: &PaperOut, t: &Theme) {
+    if p.is_retracted {
+        println!(
+            "{}",
+            t.warn
+                .style("** RETRACTED ** — this paper has been retracted")
+        );
+    }
     println!("{}", t.title.style(&p.title));
     if !p.authors.is_empty() {
         let org = if p.organizations.is_empty() {
@@ -211,6 +218,60 @@ pub fn print_paper(p: &PaperOut, t: &Theme) {
         }
         println!("{}", t.dim.style(cite_parts.join("  ")));
     }
+    // publication details
+    let mut pub_parts: Vec<String> = Vec::new();
+    if let Some(ref pt) = p.publication_type {
+        pub_parts.push(pt.clone());
+    }
+    if let Some(ref j) = p.journal {
+        use std::fmt::Write;
+        let mut jstr = j.name.clone();
+        if let Some(ref vol) = j.volume {
+            let _ = write!(jstr, " vol. {vol}");
+        }
+        if let Some(ref pages) = j.pages {
+            let _ = write!(jstr, ", pp. {pages}");
+        }
+        pub_parts.push(jstr);
+    }
+    if let Some(ref oa) = p.open_access {
+        if let Some(ref status) = oa.status {
+            pub_parts.push(format!("OA: {status}"));
+        }
+        if let Some(ref lic) = oa.license {
+            pub_parts.push(lic.clone());
+        }
+    }
+    if !pub_parts.is_empty() {
+        println!("{}", t.dim.style(pub_parts.join("  ")));
+    }
+
+    if !p.fields_of_study.is_empty() || p.openalex_topic.is_some() {
+        let mut parts = Vec::new();
+        if let Some(ref topic) = p.openalex_topic {
+            parts.push(topic.clone());
+        }
+        if let Some(ref sub) = p.openalex_subfield {
+            if p.openalex_topic.as_ref() != Some(sub) {
+                parts.push(sub.clone());
+            }
+        }
+        for f in &p.fields_of_study {
+            if !parts.iter().any(|p| p == f) {
+                parts.push(f.clone());
+            }
+        }
+        println!(
+            "{} {}",
+            t.accent.style("fields:"),
+            t.dim.style(parts.join(", "))
+        );
+    }
+
+    if let Some(ref doi) = p.doi {
+        println!("{} https://doi.org/{}", t.accent.style("doi:   "), doi);
+    }
+
     if let Some(ref tldr) = p.tldr {
         println!("\n{} {}", t.accent.style("tldr:"), tldr);
     }
@@ -237,6 +298,75 @@ pub fn print_paper(p: &PaperOut, t: &Theme) {
             parts.push(lang.clone());
         }
         println!("{} {}\n", t.accent.style("github:"), parts.join("  "));
+    }
+
+    // huggingface
+    {
+        let hf = &p.huggingface;
+        let mut hf_parts = vec![hf.paper_url.clone()];
+        if let Some(up) = hf.upvotes {
+            hf_parts.push(format!("{} upvotes", fmt_count(u64::from(up))));
+        }
+        if !hf.models.is_empty() {
+            hf_parts.push(format!("{} models", hf.models.len()));
+        }
+        if !hf.datasets.is_empty() {
+            hf_parts.push(format!("{} datasets", hf.datasets.len()));
+        }
+        if !hf.spaces.is_empty() {
+            hf_parts.push(format!("{} spaces", hf.spaces.len()));
+        }
+        println!("{} {}\n", t.accent.style("hf:      "), hf_parts.join("  "));
+
+        if !hf.models.is_empty() {
+            println!("{}", t.heading.style("--- models ---"));
+            for (i, m) in hf.models.iter().enumerate() {
+                let mut meta = vec![
+                    format!("{} likes", fmt_count(m.likes)),
+                    format!("{} dl", fmt_count(m.downloads)),
+                ];
+                if let Some(ref pipe) = m.pipeline {
+                    meta.push(pipe.clone());
+                }
+                println!(
+                    "  {} {}  {}",
+                    t.idx.style(format!("[{}]", i + 1)),
+                    t.title.style(&m.id),
+                    t.dim.style(meta.join("  "))
+                );
+            }
+            println!();
+        }
+
+        if !hf.datasets.is_empty() {
+            println!("{}", t.heading.style("--- datasets ---"));
+            for (i, d) in hf.datasets.iter().enumerate() {
+                println!(
+                    "  {} {}  {}",
+                    t.idx.style(format!("[{}]", i + 1)),
+                    t.title.style(&d.id),
+                    t.dim.style(format!(
+                        "{} likes  {} dl",
+                        fmt_count(d.likes),
+                        fmt_count(d.downloads)
+                    ))
+                );
+            }
+            println!();
+        }
+
+        if !hf.spaces.is_empty() {
+            println!("{}", t.heading.style("--- spaces ---"));
+            for (i, sp) in hf.spaces.iter().enumerate() {
+                println!(
+                    "  {} {}  {}",
+                    t.idx.style(format!("[{}]", i + 1)),
+                    t.title.style(&sp.id),
+                    t.dim.style(format!("{} likes", fmt_count(sp.likes)))
+                );
+            }
+            println!();
+        }
     }
 
     if let Some(ref ov) = p.overview {

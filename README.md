@@ -1,8 +1,6 @@
 # alphaxiv
 
-Read arxiv papers from your terminal.
-
-You can look up papers, read the full text, search, browse what's trending, see who cites what — and get it all as json for piping into other tools or LLM agents.
+A CLI for looking up arxiv papers. You give it a paper ID and it tells you everything it can find — who wrote it, how many citations, whether anyone's put models on HuggingFace for it, if it's been retracted, all of it. Works as a pipe-friendly JSON source for agents and scripts too.
 
 ```
 cargo install --path .
@@ -16,63 +14,66 @@ alphaxiv feed
 alphaxiv feed --sort views --interval 30d --limit 10
 ```
 
-**Look up a paper** — give it an id, a url, a doi, whatever:
+**Look up a paper.** Give it an ID, a URL, a DOI — it figures it out:
 ```bash
 alphaxiv paper 2502.11089
 alphaxiv paper "https://arxiv.org/abs/1706.03762"
 alphaxiv paper "https://doi.org/10.48550/arXiv.1706.03762"
-alphaxiv paper "arXiv:2502.11089"
 ```
 
-You get the abstract, authors, comments, bibtex, github links, plus citation count and a one-line TLDR from Semantic Scholar. Add `--overview` to also pull the alphaxiv blog post about the paper.
+This hits five APIs at once (alphaxiv, Semantic Scholar, HuggingFace, OpenAlex, and arxiv itself) and gives you everything back in one shot. Abstract, authors, bibtex, citation counts, TLDR, DOI, journal info, open access status, retraction warnings, associated HuggingFace models and datasets, comments, github repos. Add `--overview` if you also want the alphaxiv blog post about the paper.
 
-**Read the full paper:**
+**Read the full text:**
 ```bash
 alphaxiv read 1706.03762
 ```
 
-This grabs the HTML version from arxiv and gives you the whole thing — introduction, methods, experiments, all of it — split into sections. Equations come through as LaTeX. No janky PDF parsing.
+Pulls the HTML version from arxiv, parses the LaTeXML, and gives you the whole paper split into sections with equations as LaTeX. No PDF parsing.
 
-**Search for papers:**
+**Search:**
 ```bash
 alphaxiv search "chain of thought reasoning"
 alphaxiv search "diffusion models" --limit 5
 ```
 
-Every result comes back with the full abstract, not a useless snippet.
+Results come back with the full abstract, not a snippet.
 
-**See what a paper cites, or who cites it:**
+**Citations and references:**
 ```bash
-alphaxiv refs 1706.03762      # papers this one references
-alphaxiv cites 1706.03762     # papers that cite this one
+alphaxiv refs 1706.03762      # what this paper cites
+alphaxiv cites 1706.03762     # what cites this paper
 ```
 
-**Look up a bunch of papers at once:**
+**Batch lookups:**
 ```bash
 alphaxiv batch 1706.03762 2502.11089 2501.12948 --no-comments
 ```
 
-Runs in parallel, so it's fast.
+**Bibtex:**
+```bash
+alphaxiv paper 1706.03762 --bibtex
+```
 
-## JSON mode
+## JSON
 
-Add `--json` to any command. You get clean json on stdout with a stable schema — every field shows up every time, no fields disappearing when they're empty. Errors come back as `{"error": "..."}` with exit code 1.
+Add `--json` to any command. The schema is stable — every field shows up every time, even when empty. Errors come back as `{"error": "..."}` with exit code 1. If you're feeding this into an agent or a script, that's what you want.
 
 ```bash
 alphaxiv paper 2502.11089 --json
-alphaxiv read 1706.03762 --json
-alphaxiv cites 2502.11089 --json
+alphaxiv feed --limit 5 --json
 ```
 
-If you're building something on top of this (an agent, a script, whatever), `--json` is what you want.
+`--raw` keeps markdown/html intact instead of stripping it for the terminal.
 
-There's also `--raw` which keeps markdown and html formatting intact instead of stripping it for the terminal.
+## Data sources
 
-## Where the data comes from
+When you look up a paper, it queries all of these in parallel:
 
-- **alphaxiv.org** — trending feed, search, comments, overviews, view/like counts
-- **arxiv.org** — full paper text (their HTML rendering)
-- **Semantic Scholar** — TLDR, citation counts, references, who-cites-who
+- **alphaxiv.org** — feed, search, comments, overviews, view counts, bibtex, github
+- **Semantic Scholar** — TLDR, citations, references, DOI, journal, publication type, fields of study
+- **HuggingFace** — paper upvotes, models, datasets, spaces
+- **OpenAlex** — retraction status, open access classification, topic hierarchy
+- **arxiv.org** — full paper HTML
 
 ## Install
 
@@ -80,4 +81,4 @@ There's also `--raw` which keeps markdown and html formatting intact instead of 
 cargo install --path .
 ```
 
-That puts `alphaxiv` in your path. Needs Rust.
+Needs Rust 1.85+.

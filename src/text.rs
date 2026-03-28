@@ -151,11 +151,13 @@ pub fn decode_html_entities(s: &str) -> String {
             }
             // numeric entities: &#123; or &#x7B;
             if let Some(num_part) = entity.strip_prefix('#') {
-                let code = if let Some(hex) = num_part.strip_prefix('x').or_else(|| num_part.strip_prefix('X')) {
-                    u32::from_str_radix(hex, 16).ok()
-                } else {
-                    num_part.parse::<u32>().ok()
-                };
+                let code = num_part
+                    .strip_prefix('x')
+                    .or_else(|| num_part.strip_prefix('X'))
+                    .map_or_else(
+                        || num_part.parse::<u32>().ok(),
+                        |hex| u32::from_str_radix(hex, 16).ok(),
+                    );
                 if let Some(c) = code.and_then(char::from_u32) {
                     out.push(c);
                     rest = &rest[semi + 2..];
@@ -378,7 +380,7 @@ fn extract_href(tag: &str) -> Option<String> {
     }
 }
 
-fn sup_char(c: char) -> Option<char> {
+const fn sup_char(c: char) -> Option<char> {
     match c {
         '0' => Some('\u{2070}'),
         '1' => Some('\u{00B9}'),
@@ -403,7 +405,7 @@ fn sup_char(c: char) -> Option<char> {
     }
 }
 
-fn sub_char(c: char) -> Option<char> {
+const fn sub_char(c: char) -> Option<char> {
     match c {
         '0' => Some('\u{2080}'),
         '1' => Some('\u{2081}'),

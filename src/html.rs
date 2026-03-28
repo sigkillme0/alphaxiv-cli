@@ -1,9 +1,8 @@
 use anyhow::{bail, Context, Result};
+use reqwest::Client;
 use scraper::{ElementRef, Html, Selector};
 use serde::Serialize;
-use ureq::Agent;
 
-const UA: &str = "alphaxiv-cli/0.4";
 const MAX_RETRIES: u32 = 3;
 
 // ── output types ────────────────────────────────────────────────────────────
@@ -24,27 +23,33 @@ pub struct Section {
 
 // ── public api ──────────────────────────────────────────────────────────────
 
-pub fn fetch_paper_content(agent: &Agent, paper_id: &str) -> Result<PaperContent> {
+pub async fn fetch_paper_content(client: &Client, paper_id: &str) -> Result<PaperContent> {
     let url = format!("https://arxiv.org/html/{paper_id}");
-    let raw_html = get_html(agent, &url)?;
+    let raw_html = get_html(client, &url).await?;
     parse_paper(&raw_html, paper_id)
 }
 
 // ── http fetch with retries ─────────────────────────────────────────────────
 
-fn get_html(agent: &Agent, url: &str) -> Result<String> {
+async fn get_html(client: &Client, url: &str) -> Result<String> {
     let mut last_err = String::new();
     for attempt in 0..=MAX_RETRIES {
         if attempt > 0 {
-            std::thread::sleep(std::time::Duration::from_millis(500 * (1 << (attempt - 1))));
+            tokio::time::sleep(std::time::Duration::from_millis(500 * (1 << (attempt - 1)))).await;
         }
-        match agent.get(url).header("User-Agent", UA).call() {
-            Ok(mut resp) => return resp.body_mut().read_to_string().context("reading body"),
-            Err(ureq::Error::StatusCode(404)) => {
-                bail!("html version not available for this paper")
-            }
-            Err(ureq::Error::StatusCode(code)) if code != 429 && code < 500 => {
-                bail!("http {code}")
+        match client.get(url).send().await {
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                if status == 404 {
+                    bail!("html version not available for this paper");
+                }
+                if status != 429 && (400..500).contains(&status) {
+                    bail!("http {status}");
+                }
+                if (200..300).contains(&status) {
+                    return resp.text().await.context("reading body");
+                }
+                last_err = format!("http {status}");
             }
             Err(e) => {
                 last_err = e.to_string();
@@ -72,7 +77,6 @@ fn parse_paper(raw_html: &str, paper_id: &str) -> Result<PaperContent> {
     let sel_bib = Selector::parse("section.ltx_bibliography").expect("bibliography selector");
     let sel_bibitem = Selector::parse("li.ltx_bibitem").expect("bibitem selector");
 
-    // extract title
     let title = doc
         .select(&sel_title)
         .next()
@@ -87,7 +91,6 @@ fn parse_paper(raw_html: &str, paper_id: &str) -> Result<PaperContent> {
 
     let mut sections = Vec::new();
 
-    // extract abstract
     if let Some(abs_el) = doc.select(&sel_abstract).next() {
         let mut body = String::new();
         for p in abs_el.select(&sel_abstract_p) {
@@ -105,7 +108,6 @@ fn parse_paper(raw_html: &str, paper_id: &str) -> Result<PaperContent> {
         }
     }
 
-    // extract sections
     for sec_el in doc.select(&sel_section) {
         extract_section(
             &sec_el,
@@ -116,12 +118,12 @@ fn parse_paper(raw_html: &str, paper_id: &str) -> Result<PaperContent> {
         );
     }
 
-    // extract bibliography
     if let Some(bib_el) = doc.select(&sel_bib).next() {
         let heading_sel = Selector::parse("h2.ltx_title").expect("bib heading selector");
         let heading = bib_el
             .select(&heading_sel)
-            .next().map_or_else(|| "References".to_string(), |el| text_without_tags(&el))
+            .next()
+            .map_or_else(|| "References".to_string(), |el| text_without_tags(&el))
             .trim()
             .to_string();
 
@@ -175,7 +177,6 @@ fn extract_section(
         .trim()
         .to_string();
 
-    // collect body from direct children, skipping subsections and heading
     let body = extract_section_body(el, level);
 
     if !heading.is_empty() || !body.is_empty() {
@@ -186,7 +187,6 @@ fn extract_section(
         });
     }
 
-    // recurse into subsections — only direct children (not nested deeper)
     if level == 1 {
         for sub in el.select(sel_subsection) {
             if is_direct_child_section(el, &sub) {
@@ -202,20 +202,16 @@ fn extract_section(
     }
 }
 
-/// Check that `child` is a direct section child of `parent` — i.e. there is no
-/// intermediate `section.ltx_section` / `section.ltx_subsection` /
-/// `section.ltx_subsubsection` between them.
+/// Check that `child` is a direct section child of `parent`.
 fn is_direct_child_section(parent: &ElementRef, child: &ElementRef) -> bool {
     let parent_html_id = parent.value().attr("id");
     let mut node = child.parent();
     while let Some(p) = node {
         if let Some(el) = ElementRef::wrap(p) {
             let v = el.value();
-            // reached the parent element
             if v.attr("id") == parent_html_id && v.name() == parent.value().name() {
                 return true;
             }
-            // hit an intermediate section → not a direct child
             if v.name() == "section"
                 && (v.classes().any(|c| c == "ltx_section")
                     || v.classes().any(|c| c == "ltx_subsection")
@@ -234,7 +230,6 @@ fn is_direct_child_section(parent: &ElementRef, child: &ElementRef) -> bool {
 fn extract_section_body(section: &ElementRef, level: u8) -> String {
     let mut parts: Vec<String> = Vec::new();
 
-    // child section class to skip
     let skip_classes: &[&str] = match level {
         1 => &["ltx_subsection"],
         2 => &["ltx_subsubsection"],
@@ -247,17 +242,14 @@ fn extract_section_body(section: &ElementRef, level: u8) -> String {
         };
         let v = child_el.value();
 
-        // skip child sections
         if v.name() == "section" && skip_classes.iter().any(|c| v.classes().any(|cls| cls == *c)) {
             continue;
         }
 
-        // skip headings (already captured)
         if matches!(v.name(), "h1" | "h2" | "h3" | "h4" | "h5" | "h6") {
             continue;
         }
 
-        // div.ltx_para → extract paragraphs
         if v.name() == "div" && v.classes().any(|c| c == "ltx_para") {
             let text = extract_para_text(&child_el);
             if !text.is_empty() {
@@ -266,7 +258,6 @@ fn extract_section_body(section: &ElementRef, level: u8) -> String {
             continue;
         }
 
-        // figure
         if v.name() == "figure" && v.classes().any(|c| c == "ltx_figure") {
             if let Some(cap) = extract_caption(&child_el, "Figure") {
                 parts.push(cap);
@@ -274,7 +265,6 @@ fn extract_section_body(section: &ElementRef, level: u8) -> String {
             continue;
         }
 
-        // table (figure.ltx_table)
         if v.name() == "figure" && v.classes().any(|c| c == "ltx_table") {
             if let Some(cap) = extract_caption(&child_el, "Table") {
                 parts.push(cap);
@@ -282,7 +272,6 @@ fn extract_section_body(section: &ElementRef, level: u8) -> String {
             continue;
         }
 
-        // display equation at section level
         if v.name() == "table" && v.classes().any(|c| c == "ltx_equation") {
             if let Some(eq) = extract_display_math(&child_el) {
                 parts.push(eq);
@@ -290,7 +279,6 @@ fn extract_section_body(section: &ElementRef, level: u8) -> String {
             continue;
         }
 
-        // some papers wrap content in extra divs; walk one level deeper
         for nested in child_el.children() {
             let Some(n_el) = ElementRef::wrap(nested) else {
                 continue;
@@ -345,7 +333,6 @@ fn extract_para_text(para: &ElementRef) -> String {
         }
     }
 
-    // fallback: use select to find nested p.ltx_p / equations
     if parts.is_empty() {
         for p in para.select(&sel_p) {
             let text = extract_text(&p).trim().to_string();
@@ -385,12 +372,10 @@ fn extract_text_inner(el: &ElementRef, out: &mut String) {
                 };
                 let v = child_el.value();
 
-                // skip section-number tags
                 if v.name() == "span" && v.classes().any(|c| c == "ltx_tag") {
                     continue;
                 }
 
-                // math element → extract alttext
                 if v.name() == "math" {
                     if let Some(alt) = v.attr("alttext") {
                         let is_block = v.attr("display") == Some("block");
@@ -407,7 +392,6 @@ fn extract_text_inner(el: &ElementRef, out: &mut String) {
                     continue;
                 }
 
-                // skip nav, header, footer
                 if v.name() == "nav" && v.classes().any(|c| c == "ltx_page_navbar") {
                     continue;
                 }
@@ -451,7 +435,6 @@ fn extract_caption(fig: &ElementRef, kind: &str) -> Option<String> {
     let full_text = extract_text(&cap_el).trim().to_string();
 
     if !tag_text.is_empty() {
-        // strip the tag from the caption text to get just the description
         let desc = full_text
             .strip_prefix(tag_text.trim())
             .unwrap_or(&full_text)
@@ -472,7 +455,6 @@ fn extract_caption(fig: &ElementRef, kind: &str) -> Option<String> {
 
 // ── text extraction skipping tag spans ──────────────────────────────────────
 
-/// Extract text from an element, skipping `span.ltx_tag` children (section numbers).
 fn text_without_tags(el: &ElementRef) -> String {
     let mut out = String::new();
     collect_text_skip_tags(el, &mut out);
@@ -488,11 +470,9 @@ fn collect_text_skip_tags(el: &ElementRef, out: &mut String) {
                     continue;
                 };
                 let v = child_el.value();
-                // skip tag spans (section numbers like "1 ", "2.1 ")
                 if v.name() == "span" && v.classes().any(|c| c == "ltx_tag") {
                     continue;
                 }
-                // handle math in titles
                 if v.name() == "math" {
                     if let Some(alt) = v.attr("alttext") {
                         out.push('$');

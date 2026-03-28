@@ -1,6 +1,8 @@
 mod api;
 mod display;
+mod hf;
 mod html;
+mod openalex;
 mod scholar;
 mod text;
 mod types;
@@ -34,7 +36,7 @@ enum Sort {
 }
 
 impl Sort {
-    fn as_api(&self) -> &str {
+    const fn as_api(&self) -> &str {
         match self {
             Self::Hot => "Hot",
             Self::Views => "Views",
@@ -60,7 +62,7 @@ enum Interval {
 }
 
 impl Interval {
-    fn as_api(&self) -> &str {
+    const fn as_api(&self) -> &str {
         match self {
             Self::ThreeDays => "3 Days",
             Self::SevenDays => "7 Days",
@@ -143,10 +145,11 @@ enum Cmd {
 
 // ── main ────────────────────────────────────────────────────────────────────
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let cli = Cli::parse();
     let json_mode = cli.json;
-    if let Err(e) = run(cli) {
+    if let Err(e) = run(cli).await {
         if json_mode {
             let err = serde_json::json!({ "error": format!("{:#}", e) });
             println!(
@@ -160,11 +163,11 @@ fn main() {
     }
 }
 
-fn run(cli: Cli) -> Result<()> {
+async fn run(cli: Cli) -> Result<()> {
     let use_color =
         !cli.json && std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
     let t = display::Theme::new(use_color);
-    let client = api::ApiClient::new();
+    let client = api::ApiClient::new()?;
     let raw = cli.raw;
 
     match cli.cmd {
@@ -177,7 +180,7 @@ fn run(cli: Cli) -> Result<()> {
             if limit == 0 {
                 bail!("limit must be greater than 0");
             }
-            let entries = client.fetch_feed(page, limit, sort.as_api(), interval.as_api())?;
+            let entries = client.fetch_feed(page, limit, sort.as_api(), interval.as_api()).await?;
             if entries.is_empty() {
                 if cli.json {
                     println!("[]");
@@ -203,7 +206,7 @@ fn run(cli: Cli) -> Result<()> {
                 overview && !bibtex,
                 !bibtex && !no_comments,
                 raw,
-            )?;
+            ).await?;
 
             if bibtex {
                 match paper.bibtex {
@@ -241,7 +244,7 @@ fn run(cli: Cli) -> Result<()> {
             if q.is_empty() {
                 bail!("search query required");
             }
-            let hits = client.search_papers(&q, limit)?;
+            let hits = client.search_papers(&q, limit).await?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&hits)?);
             } else {
@@ -256,7 +259,7 @@ fn run(cli: Cli) -> Result<()> {
             if ids.is_empty() {
                 bail!("at least one paper id required");
             }
-            let entries = client.fetch_batch(&ids, overview, !no_comments, raw);
+            let entries = client.fetch_batch(&ids, overview, !no_comments, raw).await;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&entries)?);
             } else {
@@ -265,7 +268,7 @@ fn run(cli: Cli) -> Result<()> {
         }
         Cmd::Read { id } => {
             let clean_id = text::extract_paper_id(&id);
-            let content = html::fetch_paper_content(&client.agent, &clean_id)?;
+            let content = html::fetch_paper_content(&client.client, &clean_id).await?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&content)?);
             } else {
@@ -274,7 +277,7 @@ fn run(cli: Cli) -> Result<()> {
         }
         Cmd::Refs { id } => {
             let clean_id = text::extract_paper_id(&id);
-            let refs = scholar::fetch_references(&client.agent, &clean_id)?;
+            let refs = scholar::fetch_references(&client.client, &clean_id).await?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&refs)?);
             } else {
@@ -283,7 +286,7 @@ fn run(cli: Cli) -> Result<()> {
         }
         Cmd::Cites { id, limit } => {
             let clean_id = text::extract_paper_id(&id);
-            let cites = scholar::fetch_citations(&client.agent, &clean_id, limit)?;
+            let cites = scholar::fetch_citations(&client.client, &clean_id, limit).await?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&cites)?);
             } else {

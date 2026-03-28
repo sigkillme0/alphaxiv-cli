@@ -138,7 +138,7 @@ pub struct ApiComment {
     #[serde(rename = "parentCommentId")]
     pub parent_comment_id: Option<String>,
     #[serde(default)]
-    pub responses: Vec<ApiComment>,
+    pub responses: Vec<Self>,
     pub date: Option<String>,
 }
 
@@ -212,6 +212,15 @@ pub struct PaperOut {
     pub influential_citation_count: Option<u64>,
     pub reference_count: Option<u64>,
     pub venue: Option<String>,
+    pub doi: Option<String>,
+    pub publication_type: Option<String>,
+    pub journal: Option<JournalOut>,
+    pub fields_of_study: Vec<String>,
+    pub open_access: Option<OpenAccessOut>,
+    pub is_retracted: bool,
+    pub openalex_topic: Option<String>,
+    pub openalex_subfield: Option<String>,
+    pub huggingface: HuggingFaceOut,
     pub alphaxiv_url: String,
     pub arxiv_url: String,
     pub pdf_url: Option<String>,
@@ -241,6 +250,53 @@ pub struct ReplyOut {
     pub date: Option<String>,
     pub text: String,
     pub upvotes: u32,
+}
+
+#[derive(Serialize)]
+pub struct JournalOut {
+    pub name: String,
+    pub volume: Option<String>,
+    pub pages: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct OpenAccessOut {
+    pub status: Option<String>,
+    pub pdf_url: Option<String>,
+    pub license: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct HuggingFaceOut {
+    pub paper_url: String,
+    pub upvotes: Option<u32>,
+    pub models: Vec<HfModelOut>,
+    pub datasets: Vec<HfDatasetOut>,
+    pub spaces: Vec<HfSpaceOut>,
+}
+
+#[derive(Serialize)]
+pub struct HfModelOut {
+    pub id: String,
+    pub likes: u64,
+    pub downloads: u64,
+    pub pipeline: Option<String>,
+    pub url: String,
+}
+
+#[derive(Serialize)]
+pub struct HfDatasetOut {
+    pub id: String,
+    pub likes: u64,
+    pub downloads: u64,
+    pub url: String,
+}
+
+#[derive(Serialize)]
+pub struct HfSpaceOut {
+    pub id: String,
+    pub likes: u64,
+    pub url: String,
 }
 
 #[derive(Serialize)]

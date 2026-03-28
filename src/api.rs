@@ -2,51 +2,56 @@ use crate::text::{
     clean_comment, clean_overview, extract_paper_id, format_date, normalize_ws, sanitize_bibtex,
     urlencode,
 };
-use crate::types::{FeedEntry, ApiFeedResp, PaperOut, ApiPaperResp, GithubOut, ApiOverviewResp, SearchOut, ApiSearchHit, BatchEntry, ApiComment, CommentOut, ReplyOut};
+use crate::types::{
+    ApiFeedResp, ApiOverviewResp, ApiPaperResp, ApiSearchHit, BatchEntry, CommentOut, FeedEntry,
+    GithubOut, HfDatasetOut, HfModelOut, HfSpaceOut, HuggingFaceOut, JournalOut, OpenAccessOut,
+    PaperOut, ReplyOut, SearchOut,
+};
 use anyhow::{bail, Context, Result};
+use reqwest::Client;
 use std::time::Duration;
-use ureq::Agent;
 
 const API: &str = "https://api.alphaxiv.org";
 pub const SITE: &str = "https://www.alphaxiv.org";
-const UA: &str = "alphaxiv-cli/0.4";
 const MAX_RETRIES: u32 = 3;
 const TIMEOUT_SECS: u64 = 30;
 const MAX_CONCURRENT: usize = 8;
 
+#[derive(Clone)]
 pub struct ApiClient {
-    pub(crate) agent: Agent,
+    pub(crate) client: Client,
 }
 
 impl ApiClient {
-    pub fn new() -> Self {
-        let config = Agent::config_builder()
-            .timeout_global(Some(Duration::from_secs(TIMEOUT_SECS)))
-            .build();
-        Self {
-            agent: config.into(),
-        }
+    pub fn new() -> Result<Self> {
+        let client = Client::builder()
+            .timeout(Duration::from_secs(TIMEOUT_SECS))
+            .user_agent("alphaxiv-cli/0.4")
+            .build()
+            .context("building http client")?;
+        Ok(Self { client })
     }
 
-    fn get(&self, path: &str) -> Result<String> {
+    async fn get(&self, path: &str) -> Result<String> {
         let url = format!("{API}{path}");
         let mut last_err = String::new();
         for attempt in 0..=MAX_RETRIES {
             if attempt > 0 {
-                std::thread::sleep(Duration::from_millis(500 * (1 << (attempt - 1))));
+                tokio::time::sleep(Duration::from_millis(500 * (1 << (attempt - 1)))).await;
             }
-            match self.agent.get(&url).header("User-Agent", UA).call() {
-                Ok(mut resp) => {
-                    return resp
-                        .body_mut()
-                        .read_to_string()
-                        .context("reading response body");
-                }
-                Err(ureq::Error::StatusCode(404)) => {
-                    bail!("not found on alphaxiv");
-                }
-                Err(ureq::Error::StatusCode(code)) if code != 429 && code < 500 => {
-                    bail!("api returned http {code}");
+            match self.client.get(&url).send().await {
+                Ok(resp) => {
+                    let status = resp.status().as_u16();
+                    if status == 404 {
+                        bail!("not found on alphaxiv");
+                    }
+                    if status != 429 && (400..500).contains(&status) {
+                        bail!("api returned http {status}");
+                    }
+                    if (200..300).contains(&status) {
+                        return resp.text().await.context("reading response body");
+                    }
+                    last_err = format!("http {status}");
                 }
                 Err(e) => {
                     last_err = e.to_string();
@@ -59,8 +64,8 @@ impl ApiClient {
         bail!("request failed: {last_err}")
     }
 
-    fn json<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T> {
-        let body = self.get(path)?;
+    async fn json<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T> {
+        let body = self.get(path).await?;
         match serde_json::from_str::<T>(&body) {
             Ok(v) => Ok(v),
             Err(e) => {
@@ -76,7 +81,7 @@ impl ApiClient {
 
     // ── feed ────────────────────────────────────────────────────────────────
 
-    pub fn fetch_feed(
+    pub async fn fetch_feed(
         &self,
         page: usize,
         limit: usize,
@@ -90,7 +95,7 @@ impl ApiClient {
             urlencode(sort),
             urlencode(interval),
         );
-        let resp: ApiFeedResp = self.json(&path)?;
+        let resp: ApiFeedResp = self.json(&path).await?;
         Ok(resp
             .papers
             .into_iter()
@@ -126,7 +131,24 @@ impl ApiClient {
 
     // ── paper ───────────────────────────────────────────────────────────────
 
-    pub fn fetch_paper(
+    async fn fetch_axiv_with_overview(
+        &self,
+        id: &str,
+        want_overview: bool,
+        raw: bool,
+    ) -> Result<(ApiPaperResp, Option<String>)> {
+        let resp: ApiPaperResp = self.json(&format!("/papers/v3/legacy/{id}")).await?;
+        let overview = if want_overview {
+            self.fetch_overview(&resp.paper.paper_version.id)
+                .await
+                .map(|txt| clean_overview(&txt, raw))
+        } else {
+            None
+        };
+        Ok((resp, overview))
+    }
+
+    pub async fn fetch_paper(
         &self,
         raw_id: &str,
         want_overview: bool,
@@ -134,7 +156,15 @@ impl ApiClient {
         raw: bool,
     ) -> Result<PaperOut> {
         let id = extract_paper_id(raw_id);
-        let resp: ApiPaperResp = self.json(&format!("/papers/v3/legacy/{id}"))?;
+
+        let (axiv_result, scholar, hf, oa) = tokio::join!(
+            self.fetch_axiv_with_overview(&id, want_overview, raw),
+            crate::scholar::fetch_scholar_meta(&self.client, &id),
+            crate::hf::fetch_hf_enrichment(&self.client, &id),
+            crate::openalex::fetch_oa_enrichment(&self.client, &id),
+        );
+
+        let (resp, overview) = axiv_result?;
         let v = resp.paper.paper_version;
         let g = resp.paper.paper_group;
         let api_authors = resp.paper.authors;
@@ -164,31 +194,11 @@ impl ApiClient {
             .and_then(|m| m.upvotes_count)
             .unwrap_or(0);
 
-        // fetch overview + scholar metadata + process comments concurrently
-        let version_id = v.id.clone();
-        let raw_comments = resp.comments;
-        let paper_id_for_scholar = id.clone();
-        let (comments, overview, scholar) = std::thread::scope(|s| {
-            let overview_handle = if want_overview {
-                Some(s.spawn(|| {
-                    self.fetch_overview(&version_id)
-                        .map(|txt| clean_overview(&txt, raw))
-                }))
-            } else {
-                None
-            };
-            let scholar_handle = s.spawn(|| {
-                crate::scholar::fetch_scholar_meta(&self.agent, &paper_id_for_scholar)
-            });
-            let comments = if want_comments {
-                process_comments(raw_comments, raw)
-            } else {
-                Vec::new()
-            };
-            let overview = overview_handle.and_then(|h| h.join().unwrap());
-            let scholar = scholar_handle.join().unwrap();
-            (comments, overview, scholar)
-        });
+        let comments = if want_comments {
+            process_comments(resp.comments, raw)
+        } else {
+            Vec::new()
+        };
 
         let comment_count = g
             .metrics
@@ -197,13 +207,23 @@ impl ApiClient {
             .unwrap_or(comments.len() as u32);
         let reply_count: usize = comments.iter().map(|c| c.replies.len()).sum();
 
-        let github = g.resources.and_then(|r| r.github).and_then(|gh| {
-            gh.url.map(|url| GithubOut {
-                url,
-                stars: gh.stars,
-                language: gh.language,
+        let github = g
+            .resources
+            .and_then(|r| r.github)
+            .and_then(|gh| {
+                gh.url.map(|url| GithubOut {
+                    url,
+                    stars: gh.stars,
+                    language: gh.language,
+                })
             })
-        });
+            .or_else(|| {
+                hf.github_url.as_ref().map(|url| GithubOut {
+                    url: url.clone(),
+                    stars: hf.github_stars,
+                    language: None,
+                })
+            });
 
         let bibtex = g
             .citation
@@ -218,6 +238,60 @@ impl ApiClient {
 
         let version = v.version_label;
         let upid = v.universal_paper_id.as_deref().unwrap_or(&id);
+
+        let journal = scholar.journal_name.map(|name| JournalOut {
+            name,
+            volume: scholar.journal_volume,
+            pages: scholar.journal_pages,
+        });
+
+        let open_access = {
+            let has_data = scholar.open_access_url.is_some() || oa.oa_status.is_some();
+            if has_data {
+                Some(OpenAccessOut {
+                    status: oa.oa_status,
+                    pdf_url: scholar.open_access_url,
+                    license: scholar.open_access_license,
+                })
+            } else {
+                None
+            }
+        };
+
+        let huggingface = HuggingFaceOut {
+            paper_url: format!("{}/papers/{upid}", crate::hf::HF_SITE),
+            upvotes: hf.upvotes,
+            models: hf
+                .models
+                .into_iter()
+                .map(|m| HfModelOut {
+                    url: format!("{}/{}", crate::hf::HF_SITE, m.id),
+                    id: m.id,
+                    likes: m.likes,
+                    downloads: m.downloads,
+                    pipeline: m.pipeline,
+                })
+                .collect(),
+            datasets: hf
+                .datasets
+                .into_iter()
+                .map(|d| HfDatasetOut {
+                    url: format!("{}/datasets/{}", crate::hf::HF_SITE, d.id),
+                    id: d.id,
+                    likes: d.likes,
+                    downloads: d.downloads,
+                })
+                .collect(),
+            spaces: hf
+                .spaces
+                .into_iter()
+                .map(|sp| HfSpaceOut {
+                    url: format!("{}/spaces/{}", crate::hf::HF_SITE, sp.id),
+                    id: sp.id,
+                    likes: sp.likes,
+                })
+                .collect(),
+        };
 
         Ok(PaperOut {
             title: normalize_ws(&v.title),
@@ -241,31 +315,45 @@ impl ApiClient {
             influential_citation_count: scholar.influential_citation_count,
             reference_count: scholar.reference_count,
             venue: scholar.venue,
+            doi: scholar.doi,
+            publication_type: scholar.publication_types.into_iter().next(),
+            journal,
+            fields_of_study: scholar.fields_of_study,
+            open_access,
+            is_retracted: oa.is_retracted,
+            openalex_topic: oa.topic,
+            openalex_subfield: oa.subfield,
+            huggingface,
             alphaxiv_url: format!("{SITE}/abs/{upid}"),
             arxiv_url: format!("https://arxiv.org/abs/{upid}"),
             pdf_url,
         })
     }
 
-    fn fetch_overview(&self, version_id: &str) -> Option<String> {
-        let resp: ApiOverviewResp =
-            self.json(&format!("/papers/v3/{version_id}/overview/en")).ok()?;
+    async fn fetch_overview(&self, version_id: &str) -> Option<String> {
+        let resp: ApiOverviewResp = self
+            .json(&format!("/papers/v3/{version_id}/overview/en"))
+            .await
+            .ok()?;
         resp.overview.filter(|s| !s.is_empty())
     }
 
     // ── search ──────────────────────────────────────────────────────────────
 
-    pub fn search_papers(&self, query: &str, limit: Option<usize>) -> Result<Vec<SearchOut>> {
+    pub async fn search_papers(
+        &self,
+        query: &str,
+        limit: Option<usize>,
+    ) -> Result<Vec<SearchOut>> {
         let path = format!(
             "/search/v2/paper/fast?q={}&includePrivate=false",
             urlencode(query)
         );
-        let hits: Vec<ApiSearchHit> = self.json(&path)?;
+        let hits: Vec<ApiSearchHit> = self.json(&path).await?;
         let hits = match limit {
             Some(n) => &hits[..n.min(hits.len())],
             None => &hits,
         };
-        // pre-compute clean titles before threading (borrows from hits)
         let work: Vec<_> = hits
             .iter()
             .map(|h| {
@@ -278,16 +366,22 @@ impl ApiClient {
                 (h.paper_id.clone(), clean)
             })
             .collect();
-        // fetch paper details in parallel, chunked to limit concurrency
+
         let mut results = Vec::with_capacity(work.len());
         for chunk in work.chunks(MAX_CONCURRENT) {
-            let chunk_results: Vec<SearchOut> = std::thread::scope(|s| {
-                let handles: Vec<_> = chunk
-                    .iter()
-                    .map(|(paper_id, clean_title)| {
-                        s.spawn(move || {
-                            let (abstract_text, authors, date) = match self
-                                .json::<ApiPaperResp>(&format!("/papers/v3/legacy/{paper_id}"))
+            let futs: Vec<_> = chunk
+                .iter()
+                .map(|(paper_id, clean_title)| {
+                    let api = self.clone();
+                    let paper_id = paper_id.clone();
+                    let clean_title = clean_title.clone();
+                    async move {
+                        let (abstract_text, authors, date) =
+                            match api
+                                .json::<ApiPaperResp>(&format!(
+                                    "/papers/v3/legacy/{paper_id}"
+                                ))
+                                .await
                             {
                                 Ok(resp) => {
                                     let abs =
@@ -311,33 +405,36 @@ impl ApiClient {
                                         .paper_group
                                         .first_publication_date
                                         .as_deref()
-                                        .or(resp.paper.paper_version.publication_date.as_deref())
+                                        .or(
+                                            resp.paper
+                                                .paper_version
+                                                .publication_date
+                                                .as_deref(),
+                                        )
                                         .map(format_date);
                                     (abs, authors, date)
                                 }
                                 Err(_) => (None, Vec::new(), None),
                             };
-                            SearchOut {
-                                title: clean_title.clone(),
-                                id: paper_id.clone(),
-                                authors,
-                                date,
-                                abstract_text,
-                                url: format!("{SITE}/abs/{paper_id}"),
-                            }
-                        })
-                    })
-                    .collect();
-                handles.into_iter().map(|h| h.join().unwrap()).collect()
-            });
-            results.extend(chunk_results);
+                        SearchOut {
+                            title: clean_title,
+                            id: paper_id.clone(),
+                            authors,
+                            date,
+                            abstract_text,
+                            url: format!("{SITE}/abs/{paper_id}"),
+                        }
+                    }
+                })
+                .collect();
+            results.extend(futures::future::join_all(futs).await);
         }
         Ok(results)
     }
 
     // ── batch ───────────────────────────────────────────────────────────────
 
-    pub fn fetch_batch(
+    pub async fn fetch_batch(
         &self,
         ids: &[String],
         overview: bool,
@@ -346,30 +443,29 @@ impl ApiClient {
     ) -> Vec<BatchEntry> {
         let mut results = Vec::with_capacity(ids.len());
         for chunk in ids.chunks(MAX_CONCURRENT) {
-            let chunk_results: Vec<BatchEntry> = std::thread::scope(|s| {
-                let handles: Vec<_> = chunk
-                    .iter()
-                    .map(|raw_id| {
-                        s.spawn(|| {
-                            let clean_id = extract_paper_id(raw_id);
-                            match self.fetch_paper(raw_id, overview, comments, raw) {
-                                Ok(paper) => BatchEntry {
-                                    id: clean_id,
-                                    paper: Some(paper),
-                                    error: None,
-                                },
-                                Err(e) => BatchEntry {
-                                    id: clean_id,
-                                    paper: None,
-                                    error: Some(format!("{e:#}")),
-                                },
-                            }
-                        })
-                    })
-                    .collect();
-                handles.into_iter().map(|h| h.join().unwrap()).collect()
-            });
-            results.extend(chunk_results);
+            let futs: Vec<_> = chunk
+                .iter()
+                .map(|raw_id| {
+                    let api = self.clone();
+                    let raw_id = raw_id.clone();
+                    async move {
+                        let clean_id = extract_paper_id(&raw_id);
+                        match api.fetch_paper(&raw_id, overview, comments, raw).await {
+                            Ok(paper) => BatchEntry {
+                                id: clean_id,
+                                paper: Some(paper),
+                                error: None,
+                            },
+                            Err(e) => BatchEntry {
+                                id: clean_id,
+                                paper: None,
+                                error: Some(format!("{e:#}")),
+                            },
+                        }
+                    }
+                })
+                .collect();
+            results.extend(futures::future::join_all(futs).await);
         }
         results
     }
@@ -377,14 +473,14 @@ impl ApiClient {
 
 // ── comment processing ──────────────────────────────────────────────────────
 
-fn process_comments(raw: Vec<ApiComment>, raw_text: bool) -> Vec<CommentOut> {
+fn process_comments(raw: Vec<crate::types::ApiComment>, raw_text: bool) -> Vec<CommentOut> {
     raw.into_iter()
         .filter(|c| c.parent_comment_id.is_none())
         .map(|c| {
             let author = c
                 .author
                 .as_ref()
-                .and_then(|a| a.real_name.clone().or(a.username.clone()))
+                .and_then(|a| a.real_name.clone().or_else(|| a.username.clone()))
                 .unwrap_or_else(|| "anon".into());
             let date = c.date.as_deref().map(format_date);
             let context = c
@@ -398,7 +494,7 @@ fn process_comments(raw: Vec<ApiComment>, raw_text: bool) -> Vec<CommentOut> {
                     let rauthor = r
                         .author
                         .as_ref()
-                        .and_then(|a| a.real_name.clone().or(a.username.clone()))
+                        .and_then(|a| a.real_name.clone().or_else(|| a.username.clone()))
                         .unwrap_or_else(|| "anon".into());
                     ReplyOut {
                         author: rauthor,

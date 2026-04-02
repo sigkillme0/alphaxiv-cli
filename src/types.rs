@@ -307,6 +307,7 @@ pub struct SearchOut {
     pub date: Option<String>,
     #[serde(rename = "abstract")]
     pub abstract_text: Option<String>,
+    pub categories: Vec<String>,
     pub url: String,
 }
 

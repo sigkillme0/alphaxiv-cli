@@ -422,6 +422,7 @@ impl ApiClient {
                             authors,
                             date,
                             abstract_text,
+                            categories: Vec::new(),
                             url: format!("{SITE}/abs/{paper_id}"),
                         }
                     }

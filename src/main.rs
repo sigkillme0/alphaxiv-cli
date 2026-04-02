@@ -1,4 +1,5 @@
 mod api;
+mod arxiv;
 mod display;
 mod hf;
 mod html;
@@ -73,6 +74,23 @@ impl Interval {
     }
 }
 
+#[derive(Clone, ValueEnum)]
+enum SearchSort {
+    Relevance,
+    Submitted,
+    Updated,
+}
+
+impl SearchSort {
+    const fn as_api(&self) -> &str {
+        match self {
+            Self::Relevance => "relevance",
+            Self::Submitted => "submittedDate",
+            Self::Updated => "lastUpdatedDate",
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum Cmd {
     /// see what's trending on arxiv
@@ -111,6 +129,18 @@ enum Cmd {
         /// cap the number of results
         #[arg(short, long)]
         limit: Option<usize>,
+        /// sort by (submitted/updated use arxiv api directly)
+        #[arg(long, default_value = "relevance")]
+        sort: SearchSort,
+        /// sort ascending instead of descending
+        #[arg(long)]
+        asc: bool,
+        /// filter by submission date (start, YYYY-MM-DD)
+        #[arg(long)]
+        from: Option<String>,
+        /// filter by submission date (end, YYYY-MM-DD)
+        #[arg(long)]
+        to: Option<String>,
     },
     /// look up several papers at once (runs in parallel)
     Batch {
@@ -239,12 +269,27 @@ async fn run(cli: Cli) -> Result<()> {
                 display::print_paper(&paper, &t);
             }
         }
-        Cmd::Search { query, limit } => {
+        Cmd::Search { query, limit, sort, asc, from, to } => {
             let q = query.join(" ");
             if q.is_empty() {
                 bail!("search query required");
             }
-            let hits = client.search_papers(&q, limit).await?;
+            let hits = if matches!(sort, SearchSort::Relevance) && from.is_none() && to.is_none() {
+                client.search_papers(&q, limit).await?
+            } else {
+                let order = if asc { "ascending" } else { "descending" };
+                let max = limit.unwrap_or(25);
+                arxiv::search(
+                    &client.client,
+                    &q,
+                    sort.as_api(),
+                    order,
+                    0,
+                    max,
+                    from.as_deref(),
+                    to.as_deref(),
+                ).await?
+            };
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&hits)?);
             } else {

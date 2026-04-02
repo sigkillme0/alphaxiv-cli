@@ -462,6 +462,9 @@ pub fn print_search(hits: &[SearchOut], t: &Theme) {
         }
         meta.push(h.id.clone());
         println!("    {}", t.dim.style(meta.join("  ")));
+        if !h.categories.is_empty() {
+            println!("    {}", t.dim.style(h.categories.join(", ")));
+        }
         println!("    {}", t.accent.style(&h.url));
         if let Some(ref abs) = h.abstract_text {
             println!("    {}", t.dim.style(normalize_paragraphs(abs)));

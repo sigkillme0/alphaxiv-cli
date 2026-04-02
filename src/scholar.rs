@@ -109,6 +109,12 @@ struct S2CitationEntry {
 }
 
 #[derive(Deserialize)]
+struct S2RecommendationsResp {
+    #[serde(rename = "recommendedPapers")]
+    recommended_papers: Vec<S2PaperDetail>,
+}
+
+#[derive(Deserialize)]
 struct S2ReferencesResp {
     data: Vec<S2ReferenceEntry>,
 }
@@ -157,6 +163,42 @@ async fn s2_json<T: serde::de::DeserializeOwned>(client: &Client, path: &str) ->
     serde_json::from_str(&body).context("parsing semantic scholar response")
 }
 
+async fn s2_get_url(client: &Client, url: &str) -> Result<String> {
+    let mut last_err = String::new();
+    for attempt in 0..=3u32 {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(500 * (1 << (attempt - 1)))).await;
+        }
+        match client.get(url).send().await {
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                if status == 404 {
+                    bail!("paper not found on semantic scholar");
+                }
+                if status != 429 && (400..500).contains(&status) {
+                    bail!("semantic scholar returned http {status}");
+                }
+                if (200..300).contains(&status) {
+                    return resp.text().await.context("reading body");
+                }
+                last_err = format!("http {status}");
+            }
+            Err(e) => {
+                last_err = e.to_string();
+                if attempt == 3 {
+                    bail!("semantic scholar request failed after retries: {last_err}");
+                }
+            }
+        }
+    }
+    bail!("request failed: {last_err}")
+}
+
+async fn s2_json_url<T: serde::de::DeserializeOwned>(client: &Client, url: &str) -> Result<T> {
+    let body = s2_get_url(client, url).await?;
+    serde_json::from_str(&body).context("parsing semantic scholar response")
+}
+
 // ── helpers ─────────────────────────────────────────────────────────────────
 
 fn extract_arxiv_id(external_ids: Option<&HashMap<String, serde_json::Value>>) -> Option<String> {
@@ -187,6 +229,32 @@ fn citation_to_paper(entry: S2CitationEntry) -> Option<ScholarPaper> {
     let mut paper = detail_to_paper(entry.citing_paper)?;
     paper.contexts = contexts;
     Some(paper)
+}
+
+// ── author types (internal) ─────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct S2AuthorSearchResult {
+    #[serde(rename = "authorId")]
+    author_id: String,
+    name: String,
+    #[serde(rename = "paperCount")]
+    paper_count: Option<u64>,
+    #[serde(rename = "citationCount")]
+    citation_count: Option<u64>,
+    #[serde(rename = "hIndex")]
+    h_index: Option<u64>,
+    url: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct S2AuthorSearchResp {
+    data: Vec<S2AuthorSearchResult>,
+}
+
+#[derive(Deserialize)]
+struct S2AuthorPapersResp {
+    data: Vec<S2PaperDetail>,
 }
 
 // ── public api ──────────────────────────────────────────────────────────────
@@ -263,5 +331,61 @@ pub async fn fetch_citations(
         .data
         .into_iter()
         .filter_map(citation_to_paper)
+        .collect())
+}
+
+pub async fn fetch_similar(
+    client: &Client,
+    paper_id: &str,
+    limit: usize,
+) -> Result<Vec<ScholarPaper>> {
+    let url = format!(
+        "https://api.semanticscholar.org/recommendations/v1/papers/forpaper/ArXiv:{paper_id}\
+         ?limit={limit}&fields=title,year,citationCount,externalIds,authors"
+    );
+    let resp: S2RecommendationsResp = s2_json_url(client, &url).await?;
+    Ok(resp
+        .recommended_papers
+        .into_iter()
+        .filter_map(detail_to_paper)
+        .collect())
+}
+
+pub async fn search_author(client: &Client, name: &str) -> Result<crate::types::AuthorOut> {
+    let encoded = crate::text::urlencode(name);
+    let path = format!(
+        "/author/search?query={encoded}&limit=10&fields=name,hIndex,citationCount,paperCount,url"
+    );
+    let resp: S2AuthorSearchResp = s2_json(client, &path).await?;
+    // s2 returns fragmented profiles — pick the one with the most citations
+    let author = resp
+        .data
+        .into_iter()
+        .max_by_key(|a| a.citation_count.unwrap_or(0))
+        .ok_or_else(|| anyhow::anyhow!("no author found for \"{name}\""))?;
+    Ok(crate::types::AuthorOut {
+        name: author.name,
+        id: author.author_id,
+        h_index: author.h_index,
+        citation_count: author.citation_count,
+        paper_count: author.paper_count,
+        url: author.url,
+        papers: Vec::new(),
+    })
+}
+
+pub async fn fetch_author_papers(
+    client: &Client,
+    author_id: &str,
+    limit: usize,
+) -> Result<Vec<ScholarPaper>> {
+    let path = format!(
+        "/author/{author_id}/papers?fields=title,year,citationCount,externalIds,authors&limit={limit}&offset=0"
+    );
+    let resp: S2AuthorPapersResp = s2_json(client, &path).await?;
+    Ok(resp
+        .data
+        .into_iter()
+        .filter_map(detail_to_paper)
         .collect())
 }

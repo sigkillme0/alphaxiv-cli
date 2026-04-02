@@ -5,7 +5,7 @@ use serde::Deserialize;
 use crate::scholar::ScholarPaper;
 
 const OA_API: &str = "https://api.openalex.org";
-const UA: &str = "alphaxiv-cli/0.4 (mailto:alphaxiv-cli@users.noreply.github.com)";
+const UA: &str = "alphaxiv-cli/0.5 (mailto:alphaxiv-cli@users.noreply.github.com)";
 
 // ── api response types ──────────────────────────────────────────────────────
 

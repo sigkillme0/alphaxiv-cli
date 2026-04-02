@@ -31,6 +31,7 @@ pub struct ScholarPaper {
     pub year: Option<u32>,
     pub citation_count: Option<u64>,
     pub authors: Vec<String>,
+    pub contexts: Vec<String>,
 }
 
 // ── api response types (internal) ───────────────────────────────────────────
@@ -103,6 +104,8 @@ struct S2ReferenceEntry {
 struct S2CitationEntry {
     #[serde(rename = "citingPaper")]
     citing_paper: S2PaperDetail,
+    #[serde(default)]
+    contexts: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -175,7 +178,15 @@ fn detail_to_paper(detail: S2PaperDetail) -> Option<ScholarPaper> {
         year: detail.year,
         citation_count: detail.citation_count,
         authors: detail.authors.into_iter().map(|a| a.name).collect(),
+        contexts: Vec::new(),
     })
+}
+
+fn citation_to_paper(entry: S2CitationEntry) -> Option<ScholarPaper> {
+    let contexts = entry.contexts;
+    let mut paper = detail_to_paper(entry.citing_paper)?;
+    paper.contexts = contexts;
+    Some(paper)
 }
 
 // ── public api ──────────────────────────────────────────────────────────────
@@ -245,12 +256,12 @@ pub async fn fetch_citations(
     limit: usize,
 ) -> Result<Vec<ScholarPaper>> {
     let path = format!(
-        "/paper/ArXiv:{paper_id}/citations?fields=title,year,citationCount,externalIds,authors&limit={limit}"
+        "/paper/ArXiv:{paper_id}/citations?fields=title,year,citationCount,externalIds,authors,contexts&limit={limit}"
     );
     let resp: S2CitationsResp = s2_json(client, &path).await?;
     Ok(resp
         .data
         .into_iter()
-        .filter_map(|entry| detail_to_paper(entry.citing_paper))
+        .filter_map(citation_to_paper)
         .collect())
 }

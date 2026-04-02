@@ -542,6 +542,20 @@ pub fn print_scholar_papers(papers: &[crate::scholar::ScholarPaper], t: &Theme) 
         if !meta.is_empty() {
             println!("    {}", t.dim.style(meta.join("  ")));
         }
+        for ctx in p.contexts.iter().take(2) {
+            if !ctx.is_empty() {
+                let truncated = if ctx.len() > 200 {
+                    let mut end = 200;
+                    while !ctx.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    format!("{}...", &ctx[..end])
+                } else {
+                    ctx.clone()
+                };
+                println!("    {}", t.dim.style(format!("\"{truncated}\"")));
+            }
+        }
         println!();
     }
 }

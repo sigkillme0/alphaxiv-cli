@@ -8,7 +8,7 @@ mod scholar;
 mod text;
 mod types;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use std::io::IsTerminal;
 
@@ -22,6 +22,9 @@ struct Cli {
     /// get json output instead of pretty-printed text
     #[arg(long, global = true)]
     json: bool,
+    /// just print paper ids, one per line (for piping)
+    #[arg(long, global = true)]
+    ids: bool,
     /// keep markdown/html formatting instead of stripping it
     #[arg(long, global = true)]
     raw: bool,
@@ -34,6 +37,8 @@ enum Sort {
     Likes,
     Comments,
     Github,
+    #[value(name = "twitter")]
+    Twitter,
 }
 
 impl Sort {
@@ -44,6 +49,7 @@ impl Sort {
             Self::Likes => "Likes",
             Self::Comments => "Comments",
             Self::Github => "GitHub",
+            Self::Twitter => "Twitter (X)",
         }
     }
 }
@@ -171,6 +177,55 @@ enum Cmd {
         #[arg(short, long, default_value = "20")]
         limit: usize,
     },
+    /// browse latest papers in an arxiv category
+    New {
+        /// arxiv category (e.g. cs.AI, hep-th, math.CO)
+        category: String,
+        /// how many papers
+        #[arg(short, long, default_value = "25")]
+        limit: usize,
+        /// which page (starts at 0)
+        #[arg(short, long, default_value = "0")]
+        page: usize,
+        /// start date (YYYY-MM-DD)
+        #[arg(long)]
+        from: Option<String>,
+        /// end date (YYYY-MM-DD)
+        #[arg(long)]
+        to: Option<String>,
+    },
+    /// look up an author by name
+    Author {
+        /// author name, e.g. "Geoffrey Hinton"
+        name: Vec<String>,
+        /// how many top papers to show
+        #[arg(short, long, default_value = "5")]
+        limit: usize,
+    },
+    /// find similar/recommended papers
+    Similar {
+        /// arxiv id or url
+        id: String,
+        /// how many to show
+        #[arg(short, long, default_value = "20")]
+        limit: usize,
+    },
+    /// find related papers via openalex
+    Related {
+        /// arxiv id or url
+        id: String,
+        /// how many to show
+        #[arg(short, long, default_value = "20")]
+        limit: usize,
+    },
+    /// download a paper's pdf
+    Download {
+        /// arxiv id or url
+        id: String,
+        /// output filename (default: {id}.pdf)
+        #[arg(short, long)]
+        output: Option<String>,
+    },
 }
 
 // ── main ────────────────────────────────────────────────────────────────────
@@ -195,7 +250,7 @@ async fn main() {
 
 async fn run(cli: Cli) -> Result<()> {
     let use_color =
-        !cli.json && std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+        !cli.json && !cli.ids && std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
     let t = display::Theme::new(use_color);
     let client = api::ApiClient::new()?;
     let raw = cli.raw;
@@ -219,7 +274,11 @@ async fn run(cli: Cli) -> Result<()> {
                 }
                 return Ok(());
             }
-            if cli.json {
+            if cli.ids {
+                for e in &entries {
+                    println!("{}", e.id);
+                }
+            } else if cli.json {
                 println!("{}", serde_json::to_string_pretty(&entries)?);
             } else {
                 display::print_feed(&entries, page * limit, &t);
@@ -237,6 +296,11 @@ async fn run(cli: Cli) -> Result<()> {
                 !bibtex && !no_comments,
                 raw,
             ).await?;
+
+            if cli.ids {
+                println!("{}", paper.id);
+                return Ok(());
+            }
 
             if bibtex {
                 match paper.bibtex {
@@ -290,7 +354,11 @@ async fn run(cli: Cli) -> Result<()> {
                     to.as_deref(),
                 ).await?
             };
-            if cli.json {
+            if cli.ids {
+                for h in &hits {
+                    println!("{}", h.id);
+                }
+            } else if cli.json {
                 println!("{}", serde_json::to_string_pretty(&hits)?);
             } else {
                 display::print_search(&hits, &t);
@@ -305,7 +373,11 @@ async fn run(cli: Cli) -> Result<()> {
                 bail!("at least one paper id required");
             }
             let entries = client.fetch_batch(&ids, overview, !no_comments, raw).await;
-            if cli.json {
+            if cli.ids {
+                for entry in &entries {
+                    println!("{}", entry.id);
+                }
+            } else if cli.json {
                 println!("{}", serde_json::to_string_pretty(&entries)?);
             } else {
                 display::print_batch(&entries, &t);
@@ -313,6 +385,10 @@ async fn run(cli: Cli) -> Result<()> {
         }
         Cmd::Read { id } => {
             let clean_id = text::extract_paper_id(&id);
+            if cli.ids {
+                println!("{clean_id}");
+                return Ok(());
+            }
             let content = html::fetch_paper_content(&client.client, &clean_id).await?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&content)?);
@@ -323,7 +399,13 @@ async fn run(cli: Cli) -> Result<()> {
         Cmd::Refs { id } => {
             let clean_id = text::extract_paper_id(&id);
             let refs = scholar::fetch_references(&client.client, &clean_id).await?;
-            if cli.json {
+            if cli.ids {
+                for r in &refs {
+                    if let Some(ref arxiv_id) = r.arxiv_id {
+                        println!("{arxiv_id}");
+                    }
+                }
+            } else if cli.json {
                 println!("{}", serde_json::to_string_pretty(&refs)?);
             } else {
                 display::print_scholar_papers(&refs, &t);
@@ -332,12 +414,155 @@ async fn run(cli: Cli) -> Result<()> {
         Cmd::Cites { id, limit } => {
             let clean_id = text::extract_paper_id(&id);
             let cites = scholar::fetch_citations(&client.client, &clean_id, limit).await?;
-            if cli.json {
+            if cli.ids {
+                for c in &cites {
+                    if let Some(ref arxiv_id) = c.arxiv_id {
+                        println!("{arxiv_id}");
+                    }
+                }
+            } else if cli.json {
                 println!("{}", serde_json::to_string_pretty(&cites)?);
             } else {
                 display::print_scholar_papers(&cites, &t);
             }
         }
+        Cmd::New {
+            category,
+            limit,
+            page,
+            from,
+            to,
+        } => {
+            if limit == 0 {
+                bail!("limit must be greater than 0");
+            }
+            let start = page * limit;
+            let hits = arxiv::browse_category(
+                &client.client,
+                &category,
+                start,
+                limit,
+                from.as_deref(),
+                to.as_deref(),
+            ).await?;
+            if hits.is_empty() {
+                if cli.json {
+                    println!("[]");
+                } else {
+                    eprintln!("no papers found");
+                }
+                return Ok(());
+            }
+            if cli.ids {
+                for h in &hits {
+                    println!("{}", h.id);
+                }
+            } else if cli.json {
+                println!("{}", serde_json::to_string_pretty(&hits)?);
+            } else {
+                display::print_search(&hits, &t);
+            }
+        }
+        Cmd::Author { name, limit } => {
+            let q = name.join(" ");
+            if q.is_empty() {
+                bail!("author name required");
+            }
+            let mut author = scholar::search_author(&client.client, &q).await?;
+            let papers =
+                scholar::fetch_author_papers(&client.client, &author.id, limit).await?;
+            author.papers = papers;
+            if cli.ids {
+                for p in &author.papers {
+                    if let Some(ref arxiv_id) = p.arxiv_id {
+                        println!("{arxiv_id}");
+                    }
+                }
+            } else if cli.json {
+                println!("{}", serde_json::to_string_pretty(&author)?);
+            } else {
+                display::print_author(&author, &t);
+            }
+        }
+        Cmd::Similar { id, limit } => {
+            let clean_id = text::extract_paper_id(&id);
+            let similar = scholar::fetch_similar(&client.client, &clean_id, limit).await?;
+            if cli.ids {
+                for p in &similar {
+                    if let Some(ref arxiv_id) = p.arxiv_id {
+                        println!("{arxiv_id}");
+                    }
+                }
+            } else if cli.json {
+                println!("{}", serde_json::to_string_pretty(&similar)?);
+            } else {
+                display::print_scholar_papers(&similar, &t);
+            }
+        }
+        Cmd::Related { id, limit } => {
+            let clean_id = text::extract_paper_id(&id);
+            let related = openalex::fetch_related(&client.client, &clean_id, limit).await?;
+            if cli.ids {
+                for p in &related {
+                    if let Some(ref arxiv_id) = p.arxiv_id {
+                        println!("{arxiv_id}");
+                    }
+                }
+            } else if cli.json {
+                println!("{}", serde_json::to_string_pretty(&related)?);
+            } else {
+                display::print_scholar_papers(&related, &t);
+            }
+        }
+        Cmd::Download { id, output } => {
+            let clean_id = text::extract_paper_id(&id);
+            let url = format!("https://arxiv.org/pdf/{clean_id}");
+            eprintln!("downloading {url}");
+            let resp = client
+                .client
+                .get(&url)
+                .send()
+                .await
+                .context("failed to request pdf")?;
+            let status = resp.status().as_u16();
+            if status == 404 {
+                bail!("paper not found: {clean_id}");
+            }
+            if !(200..300).contains(&status) {
+                bail!("download failed: http {status}");
+            }
+            let bytes = resp.bytes().await.context("failed to read pdf bytes")?;
+            let filename = output.unwrap_or_else(|| {
+                format!("{}.pdf", clean_id.replace('/', "_"))
+            });
+            std::fs::write(&filename, &bytes)
+                .with_context(|| format!("failed to write {filename}"))?;
+            let size = bytes.len();
+            if cli.json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "file": filename,
+                        "size": size,
+                        "id": clean_id,
+                    }))?
+                );
+            } else {
+                eprintln!("saved {} ({})", filename, format_size(size));
+            }
+        }
     }
     Ok(())
+}
+
+fn format_size(bytes: usize) -> String {
+    const KB: usize = 1024;
+    const MB: usize = 1024 * KB;
+    if bytes >= MB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{bytes} B")
+    }
 }

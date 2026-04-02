@@ -317,3 +317,14 @@ pub struct BatchEntry {
     pub paper: Option<PaperOut>,
     pub error: Option<String>,
 }
+
+#[derive(Serialize)]
+pub struct AuthorOut {
+    pub name: String,
+    pub id: String,
+    pub h_index: Option<u64>,
+    pub citation_count: Option<u64>,
+    pub paper_count: Option<u64>,
+    pub url: Option<String>,
+    pub papers: Vec<crate::scholar::ScholarPaper>,
+}

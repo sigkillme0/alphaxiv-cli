@@ -497,6 +497,54 @@ pub fn print_batch(entries: &[BatchEntry], t: &Theme) {
     }
 }
 
+// ── author ──────────────────────────────────────────────────────────────────
+
+pub fn print_author(author: &crate::types::AuthorOut, t: &Theme) {
+    println!("{}", t.title.style(&author.name));
+    let mut stats = Vec::new();
+    if let Some(h) = author.h_index {
+        stats.push(format!("h-index: {h}"));
+    }
+    if let Some(c) = author.citation_count {
+        stats.push(format!("{} citations", fmt_count(c)));
+    }
+    if let Some(p) = author.paper_count {
+        stats.push(format!("{} papers", fmt_count(p)));
+    }
+    if !stats.is_empty() {
+        println!("{}", t.dim.style(stats.join("  ")));
+    }
+    if let Some(ref url) = author.url {
+        println!("{}", t.accent.style(url));
+    }
+    println!();
+    if !author.papers.is_empty() {
+        println!("{}", t.heading.style("--- top papers ---"));
+        for (i, p) in author.papers.iter().enumerate() {
+            print!("{} ", t.idx.style(format!("[{}]", i + 1)));
+            println!("{}", t.title.style(&p.title));
+            let byline = make_byline(&p.authors, None, 3);
+            if !byline.is_empty() {
+                println!("    {}", t.dim.style(&byline));
+            }
+            let mut meta = Vec::new();
+            if let Some(y) = p.year {
+                meta.push(y.to_string());
+            }
+            if let Some(c) = p.citation_count {
+                meta.push(format!("{} citations", fmt_count(c)));
+            }
+            if let Some(ref aid) = p.arxiv_id {
+                meta.push(aid.clone());
+            }
+            if !meta.is_empty() {
+                println!("    {}", t.dim.style(meta.join("  ")));
+            }
+            println!();
+        }
+    }
+}
+
 // ── read (paper content) ────────────────────────────────────────────────────
 
 pub fn print_paper_content(content: &crate::html::PaperContent, t: &Theme) {

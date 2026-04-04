@@ -346,13 +346,15 @@ async fn run(cli: Cli) -> Result<()> {
                 let max = limit.unwrap_or(25);
                 arxiv::search(
                     &client.client,
-                    &q,
-                    sort.as_api(),
-                    order,
-                    0,
-                    max,
-                    from.as_deref(),
-                    to.as_deref(),
+                    &arxiv::SearchParams {
+                        query: &q,
+                        sort_by: sort.as_api(),
+                        sort_order: order,
+                        start: 0,
+                        max_results: max,
+                        date_from: from.as_deref(),
+                        date_to: to.as_deref(),
+                    },
                 ).await?
             };
             if cli.ids {

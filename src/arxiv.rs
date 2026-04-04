@@ -9,37 +9,37 @@ const ARXIV_API: &str = "https://export.arxiv.org/api/query";
 
 // ── public api ──────────────────────────────────────────────────────────────
 
-#[allow(clippy::too_many_arguments)]
-pub async fn search(
-    client: &Client,
-    query: &str,
-    sort_by: &str,
-    sort_order: &str,
-    start: usize,
-    max_results: usize,
-    date_from: Option<&str>,
-    date_to: Option<&str>,
-) -> Result<Vec<SearchOut>> {
-    let mut search_query = if is_fielded_query(query) {
-        text::urlencode(query)
+pub struct SearchParams<'a> {
+    pub query: &'a str,
+    pub sort_by: &'a str,
+    pub sort_order: &'a str,
+    pub start: usize,
+    pub max_results: usize,
+    pub date_from: Option<&'a str>,
+    pub date_to: Option<&'a str>,
+}
+
+pub async fn search(client: &Client, params: &SearchParams<'_>) -> Result<Vec<SearchOut>> {
+    let mut search_query = if is_fielded_query(params.query) {
+        text::urlencode(params.query)
     } else {
-        // quote multi-word queries so arxiv treats them as a phrase
-        let encoded = text::urlencode(query);
-        if query.contains(' ') {
+        let encoded = text::urlencode(params.query);
+        if params.query.contains(' ') {
             format!("all:%22{encoded}%22")
         } else {
             format!("all:{encoded}")
         }
     };
 
-    if let Some(df) = date_filter(date_from, date_to) {
+    if let Some(df) = date_filter(params.date_from, params.date_to) {
         search_query = format!("{search_query}+AND+{df}");
     }
 
     let url = format!(
         "{ARXIV_API}?search_query={search_query}\
-         &sortBy={sort_by}&sortOrder={sort_order}\
-         &start={start}&max_results={max_results}"
+         &sortBy={}&sortOrder={}\
+         &start={}&max_results={}",
+        params.sort_by, params.sort_order, params.start, params.max_results
     );
 
     let body = get(client, &url).await?;

@@ -88,7 +88,7 @@ async fn hf_json<T: serde::de::DeserializeOwned>(client: &Client, url: &str) -> 
 
 // ── public api ──────────────────────────────────────────────────────────────
 
-pub async fn fetch_hf_enrichment(client: &Client, paper_id: &str) -> HfEnrichment {
+pub async fn fetch_hf_enrichment(client: &Client, paper_id: &str) -> Result<HfEnrichment> {
     let (paper, models_raw, datasets_raw, spaces_raw) = tokio::join!(
         async { hf_json::<PaperResp>(client, &format!("{HF_API}/papers/{paper_id}")).await.ok() },
         async {
@@ -128,7 +128,7 @@ pub async fn fetch_hf_enrichment(client: &Client, paper_id: &str) -> HfEnrichmen
         None => (None, None, None),
     };
 
-    HfEnrichment {
+    Ok(HfEnrichment {
         upvotes,
         github_url,
         github_stars,
@@ -156,5 +156,5 @@ pub async fn fetch_hf_enrichment(client: &Client, paper_id: &str) -> HfEnrichmen
                 likes: sp.likes,
             })
             .collect(),
-    }
+    })
 }

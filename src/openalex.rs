@@ -102,28 +102,19 @@ async fn oa_json<T: serde::de::DeserializeOwned>(client: &Client, url: &str) -> 
 
 // ── public api ──────────────────────────────────────────────────────────────
 
-pub async fn fetch_oa_enrichment(client: &Client, paper_id: &str) -> OaEnrichment {
+pub async fn fetch_oa_enrichment(client: &Client, paper_id: &str) -> Result<OaEnrichment> {
     let url = format!(
         "{OA_API}/works/doi:10.48550/arXiv.{paper_id}\
          ?select=is_retracted,open_access,primary_topic"
     );
-    match oa_json::<OaWork>(client, &url).await {
-        Ok(work) => {
-            let pt = work.primary_topic.as_ref();
-            OaEnrichment {
-                is_retracted: work.is_retracted.unwrap_or(false),
-                oa_status: work.open_access.and_then(|oa| oa.oa_status),
-                topic: pt.and_then(|t| t.display_name.clone()),
-                subfield: pt.and_then(|t| t.subfield.as_ref()?.display_name.clone()),
-            }
-        }
-        Err(_) => OaEnrichment {
-            is_retracted: false,
-            oa_status: None,
-            topic: None,
-            subfield: None,
-        },
-    }
+    let work: OaWork = oa_json(client, &url).await?;
+    let pt = work.primary_topic.as_ref();
+    Ok(OaEnrichment {
+        is_retracted: work.is_retracted.unwrap_or(false),
+        oa_status: work.open_access.and_then(|oa| oa.oa_status),
+        topic: pt.and_then(|t| t.display_name.clone()),
+        subfield: pt.and_then(|t| t.subfield.as_ref()?.display_name.clone()),
+    })
 }
 
 pub async fn fetch_related(

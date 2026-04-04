@@ -153,6 +153,9 @@ pub fn print_paper(p: &PaperOut, t: &Theme) {
                 .style("** RETRACTED ** — this paper has been retracted")
         );
     }
+    for w in &p.warnings {
+        eprintln!("{}", t.warn.style(format!("warning: {w}")));
+    }
     println!("{}", t.title.style(&p.title));
     if !p.authors.is_empty() {
         let org = if p.organizations.is_empty() {

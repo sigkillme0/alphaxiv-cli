@@ -224,6 +224,7 @@ pub struct PaperOut {
     pub alphaxiv_url: String,
     pub arxiv_url: String,
     pub pdf_url: Option<String>,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Serialize)]

@@ -195,51 +195,33 @@ struct S2AuthorPapersResp {
 
 // ── public api ──────────────────────────────────────────────────────────────
 
-pub async fn fetch_scholar_meta(client: &Client, paper_id: &str) -> ScholarMeta {
+pub async fn fetch_scholar_meta(client: &Client, paper_id: &str) -> Result<ScholarMeta> {
     let fields = "tldr,citationCount,influentialCitationCount,referenceCount,venue,year,\
                   externalIds,openAccessPdf,publicationTypes,journal,fieldsOfStudy";
     let path = format!("/paper/ArXiv:{paper_id}?fields={fields}");
-    match s2_json::<S2PaperMeta>(client, &format!("{S2_API}{path}")).await {
-        Ok(meta) => {
-            let doi = meta
-                .external_ids
-                .as_ref()
-                .and_then(|ids| ids.get("DOI"))
-                .and_then(|v| v.as_str())
-                .map(str::to_string);
-            let oa = meta.open_access_pdf.as_ref();
-            ScholarMeta {
-                tldr: meta.tldr.map(|t| t.text),
-                citation_count: meta.citation_count,
-                influential_citation_count: meta.influential_citation_count,
-                reference_count: meta.reference_count,
-                venue: meta.venue.filter(|v| !v.is_empty()),
-                doi,
-                publication_types: meta.publication_types.unwrap_or_default(),
-                journal_name: meta.journal.as_ref().and_then(|j| j.name.clone()),
-                journal_volume: meta.journal.as_ref().and_then(|j| j.volume.clone()),
-                journal_pages: meta.journal.as_ref().and_then(|j| j.pages.clone()),
-                fields_of_study: meta.fields_of_study.unwrap_or_default(),
-                open_access_url: oa.and_then(|p| p.url.clone()).filter(|u| !u.is_empty()),
-                open_access_license: oa.and_then(|p| p.license.clone()),
-            }
-        }
-        Err(_) => ScholarMeta {
-            tldr: None,
-            citation_count: None,
-            influential_citation_count: None,
-            reference_count: None,
-            venue: None,
-            doi: None,
-            publication_types: Vec::new(),
-            journal_name: None,
-            journal_volume: None,
-            journal_pages: None,
-            fields_of_study: Vec::new(),
-            open_access_url: None,
-            open_access_license: None,
-        },
-    }
+    let meta: S2PaperMeta = s2_json(client, &format!("{S2_API}{path}")).await?;
+    let doi = meta
+        .external_ids
+        .as_ref()
+        .and_then(|ids| ids.get("DOI"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let oa = meta.open_access_pdf.as_ref();
+    Ok(ScholarMeta {
+        tldr: meta.tldr.map(|t| t.text),
+        citation_count: meta.citation_count,
+        influential_citation_count: meta.influential_citation_count,
+        reference_count: meta.reference_count,
+        venue: meta.venue.filter(|v| !v.is_empty()),
+        doi,
+        publication_types: meta.publication_types.unwrap_or_default(),
+        journal_name: meta.journal.as_ref().and_then(|j| j.name.clone()),
+        journal_volume: meta.journal.as_ref().and_then(|j| j.volume.clone()),
+        journal_pages: meta.journal.as_ref().and_then(|j| j.pages.clone()),
+        fields_of_study: meta.fields_of_study.unwrap_or_default(),
+        open_access_url: oa.and_then(|p| p.url.clone()).filter(|u| !u.is_empty()),
+        open_access_license: oa.and_then(|p| p.license.clone()),
+    })
 }
 
 pub async fn fetch_references(client: &Client, paper_id: &str) -> Result<Vec<ScholarPaper>> {

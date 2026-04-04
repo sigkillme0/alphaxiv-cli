@@ -129,7 +129,7 @@ impl ApiClient {
     ) -> Result<PaperOut> {
         let id = extract_paper_id(raw_id);
 
-        let (axiv_result, scholar, hf, oa) = tokio::join!(
+        let (axiv_result, scholar_result, hf_result, oa_result) = tokio::join!(
             self.fetch_axiv_with_overview(&id, want_overview, raw),
             crate::scholar::fetch_scholar_meta(&self.client, &id),
             crate::hf::fetch_hf_enrichment(&self.client, &id),
@@ -137,6 +137,48 @@ impl ApiClient {
         );
 
         let (resp, overview) = axiv_result?;
+
+        let mut warnings: Vec<String> = Vec::new();
+
+        let scholar = scholar_result.unwrap_or_else(|e| {
+            warnings.push(format!("semantic scholar: {e:#}"));
+            crate::scholar::ScholarMeta {
+                tldr: None,
+                citation_count: None,
+                influential_citation_count: None,
+                reference_count: None,
+                venue: None,
+                doi: None,
+                publication_types: Vec::new(),
+                journal_name: None,
+                journal_volume: None,
+                journal_pages: None,
+                fields_of_study: Vec::new(),
+                open_access_url: None,
+                open_access_license: None,
+            }
+        });
+        let oa = oa_result.unwrap_or_else(|e| {
+            warnings.push(format!("openalex: {e:#}"));
+            crate::openalex::OaEnrichment {
+                is_retracted: false,
+                oa_status: None,
+                topic: None,
+                subfield: None,
+            }
+        });
+        let hf = hf_result.unwrap_or_else(|e| {
+            warnings.push(format!("huggingface: {e:#}"));
+            crate::hf::HfEnrichment {
+                upvotes: None,
+                github_url: None,
+                github_stars: None,
+                models: Vec::new(),
+                datasets: Vec::new(),
+                spaces: Vec::new(),
+            }
+        });
+
         let v = resp.paper.paper_version;
         let g = resp.paper.paper_group;
         let api_authors = resp.paper.authors;
@@ -299,6 +341,7 @@ impl ApiClient {
             alphaxiv_url: format!("{SITE}/abs/{upid}"),
             arxiv_url: format!("https://arxiv.org/abs/{upid}"),
             pdf_url,
+            warnings,
         })
     }
 

@@ -1,13 +1,11 @@
-use anyhow::{bail, Context, Result};
+use anyhow::Result;
 use reqwest::Client;
-use std::time::Duration;
 
 use crate::api::SITE;
 use crate::text;
 use crate::types::SearchOut;
 
 const ARXIV_API: &str = "https://export.arxiv.org/api/query";
-const MAX_RETRIES: u32 = 3;
 
 // ── public api ──────────────────────────────────────────────────────────────
 
@@ -75,34 +73,7 @@ pub async fn browse_category(
 // ── http ────────────────────────────────────────────────────────────────────
 
 async fn get(client: &Client, url: &str) -> Result<String> {
-    let mut last_err = String::new();
-    for attempt in 0..=MAX_RETRIES {
-        if attempt > 0 {
-            tokio::time::sleep(Duration::from_millis(1000 * (1 << (attempt - 1)))).await;
-        }
-        match client.get(url).send().await {
-            Ok(resp) => {
-                let status = resp.status().as_u16();
-                if (200..300).contains(&status) {
-                    return resp.text().await.context("reading arxiv response");
-                }
-                if status == 400 {
-                    bail!("arxiv api rejected the query");
-                }
-                if status != 429 && (400..500).contains(&status) {
-                    bail!("arxiv api returned http {status}");
-                }
-                last_err = format!("http {status}");
-            }
-            Err(e) => {
-                last_err = e.to_string();
-                if attempt == MAX_RETRIES {
-                    bail!("arxiv request failed after retries: {last_err}");
-                }
-            }
-        }
-    }
-    bail!("arxiv request failed: {last_err}")
+    crate::retry::retry_get(client, url, "arxiv", 3, 1000).await
 }
 
 // ── atom xml parsing ────────────────────────────────────────────────────────

@@ -1,9 +1,7 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use reqwest::Client;
 use scraper::{ElementRef, Html, Selector};
 use serde::Serialize;
-
-const MAX_RETRIES: u32 = 3;
 
 // ── output types ────────────────────────────────────────────────────────────
 
@@ -32,34 +30,7 @@ pub async fn fetch_paper_content(client: &Client, paper_id: &str) -> Result<Pape
 // ── http fetch with retries ─────────────────────────────────────────────────
 
 async fn get_html(client: &Client, url: &str) -> Result<String> {
-    let mut last_err = String::new();
-    for attempt in 0..=MAX_RETRIES {
-        if attempt > 0 {
-            tokio::time::sleep(std::time::Duration::from_millis(500 * (1 << (attempt - 1)))).await;
-        }
-        match client.get(url).send().await {
-            Ok(resp) => {
-                let status = resp.status().as_u16();
-                if status == 404 {
-                    bail!("html version not available for this paper");
-                }
-                if status != 429 && (400..500).contains(&status) {
-                    bail!("http {status}");
-                }
-                if (200..300).contains(&status) {
-                    return resp.text().await.context("reading body");
-                }
-                last_err = format!("http {status}");
-            }
-            Err(e) => {
-                last_err = e.to_string();
-                if attempt == MAX_RETRIES {
-                    bail!("request failed after retries: {last_err}");
-                }
-            }
-        }
-    }
-    bail!("request failed: {last_err}")
+    crate::retry::retry_get(client, url, "arxiv html", 3, 500).await
 }
 
 // ── html parsing ────────────────────────────────────────────────────────────

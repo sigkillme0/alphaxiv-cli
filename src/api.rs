@@ -13,7 +13,6 @@ use std::time::Duration;
 
 const API: &str = "https://api.alphaxiv.org";
 pub const SITE: &str = "https://www.alphaxiv.org";
-const MAX_RETRIES: u32 = 3;
 const TIMEOUT_SECS: u64 = 30;
 const MAX_CONCURRENT: usize = 8;
 
@@ -34,34 +33,7 @@ impl ApiClient {
 
     async fn get(&self, path: &str) -> Result<String> {
         let url = format!("{API}{path}");
-        let mut last_err = String::new();
-        for attempt in 0..=MAX_RETRIES {
-            if attempt > 0 {
-                tokio::time::sleep(Duration::from_millis(500 * (1 << (attempt - 1)))).await;
-            }
-            match self.client.get(&url).send().await {
-                Ok(resp) => {
-                    let status = resp.status().as_u16();
-                    if status == 404 {
-                        bail!("not found on alphaxiv");
-                    }
-                    if status != 429 && (400..500).contains(&status) {
-                        bail!("api returned http {status}");
-                    }
-                    if (200..300).contains(&status) {
-                        return resp.text().await.context("reading response body");
-                    }
-                    last_err = format!("http {status}");
-                }
-                Err(e) => {
-                    last_err = e.to_string();
-                    if attempt == MAX_RETRIES {
-                        bail!("request failed after {MAX_RETRIES} retries: {last_err}");
-                    }
-                }
-            }
-        }
-        bail!("request failed: {last_err}")
+        crate::retry::retry_get(&self.client, &url, "alphaxiv", 3, 500).await
     }
 
     async fn json<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T> {

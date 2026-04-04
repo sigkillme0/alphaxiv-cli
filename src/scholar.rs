@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -126,76 +126,12 @@ struct S2CitationsResp {
 
 // ── http helpers ────────────────────────────────────────────────────────────
 
-async fn s2_get(client: &Client, path: &str) -> Result<String> {
-    let url = format!("{S2_API}{path}");
-    let mut last_err = String::new();
-    for attempt in 0..=3u32 {
-        if attempt > 0 {
-            tokio::time::sleep(std::time::Duration::from_millis(500 * (1 << (attempt - 1)))).await;
-        }
-        match client.get(&url).send().await {
-            Ok(resp) => {
-                let status = resp.status().as_u16();
-                if status == 404 {
-                    bail!("paper not found on semantic scholar");
-                }
-                if status != 429 && (400..500).contains(&status) {
-                    bail!("semantic scholar returned http {status}");
-                }
-                if (200..300).contains(&status) {
-                    return resp.text().await.context("reading body");
-                }
-                last_err = format!("http {status}");
-            }
-            Err(e) => {
-                last_err = e.to_string();
-                if attempt == 3 {
-                    bail!("semantic scholar request failed after retries: {last_err}");
-                }
-            }
-        }
-    }
-    bail!("request failed: {last_err}")
+async fn s2_get(client: &Client, url: &str) -> Result<String> {
+    crate::retry::retry_get(client, url, "semantic scholar", 3, 500).await
 }
 
-async fn s2_json<T: serde::de::DeserializeOwned>(client: &Client, path: &str) -> Result<T> {
-    let body = s2_get(client, path).await?;
-    serde_json::from_str(&body).context("parsing semantic scholar response")
-}
-
-async fn s2_get_url(client: &Client, url: &str) -> Result<String> {
-    let mut last_err = String::new();
-    for attempt in 0..=3u32 {
-        if attempt > 0 {
-            tokio::time::sleep(std::time::Duration::from_millis(500 * (1 << (attempt - 1)))).await;
-        }
-        match client.get(url).send().await {
-            Ok(resp) => {
-                let status = resp.status().as_u16();
-                if status == 404 {
-                    bail!("paper not found on semantic scholar");
-                }
-                if status != 429 && (400..500).contains(&status) {
-                    bail!("semantic scholar returned http {status}");
-                }
-                if (200..300).contains(&status) {
-                    return resp.text().await.context("reading body");
-                }
-                last_err = format!("http {status}");
-            }
-            Err(e) => {
-                last_err = e.to_string();
-                if attempt == 3 {
-                    bail!("semantic scholar request failed after retries: {last_err}");
-                }
-            }
-        }
-    }
-    bail!("request failed: {last_err}")
-}
-
-async fn s2_json_url<T: serde::de::DeserializeOwned>(client: &Client, url: &str) -> Result<T> {
-    let body = s2_get_url(client, url).await?;
+async fn s2_json<T: serde::de::DeserializeOwned>(client: &Client, url: &str) -> Result<T> {
+    let body = s2_get(client, url).await?;
     serde_json::from_str(&body).context("parsing semantic scholar response")
 }
 
@@ -263,7 +199,7 @@ pub async fn fetch_scholar_meta(client: &Client, paper_id: &str) -> ScholarMeta 
     let fields = "tldr,citationCount,influentialCitationCount,referenceCount,venue,year,\
                   externalIds,openAccessPdf,publicationTypes,journal,fieldsOfStudy";
     let path = format!("/paper/ArXiv:{paper_id}?fields={fields}");
-    match s2_json::<S2PaperMeta>(client, &path).await {
+    match s2_json::<S2PaperMeta>(client, &format!("{S2_API}{path}")).await {
         Ok(meta) => {
             let doi = meta
                 .external_ids
@@ -310,7 +246,7 @@ pub async fn fetch_references(client: &Client, paper_id: &str) -> Result<Vec<Sch
     let path = format!(
         "/paper/ArXiv:{paper_id}/references?fields=title,year,citationCount,externalIds,authors&limit=100"
     );
-    let resp: S2ReferencesResp = s2_json(client, &path).await?;
+    let resp: S2ReferencesResp = s2_json(client, &format!("{S2_API}{path}")).await?;
     Ok(resp
         .data
         .into_iter()
@@ -326,7 +262,7 @@ pub async fn fetch_citations(
     let path = format!(
         "/paper/ArXiv:{paper_id}/citations?fields=title,year,citationCount,externalIds,authors,contexts&limit={limit}"
     );
-    let resp: S2CitationsResp = s2_json(client, &path).await?;
+    let resp: S2CitationsResp = s2_json(client, &format!("{S2_API}{path}")).await?;
     Ok(resp
         .data
         .into_iter()
@@ -343,7 +279,7 @@ pub async fn fetch_similar(
         "https://api.semanticscholar.org/recommendations/v1/papers/forpaper/ArXiv:{paper_id}\
          ?limit={limit}&fields=title,year,citationCount,externalIds,authors"
     );
-    let resp: S2RecommendationsResp = s2_json_url(client, &url).await?;
+    let resp: S2RecommendationsResp = s2_json(client, &url).await?;
     Ok(resp
         .recommended_papers
         .into_iter()
@@ -356,7 +292,7 @@ pub async fn search_author(client: &Client, name: &str) -> Result<crate::types::
     let path = format!(
         "/author/search?query={encoded}&limit=10&fields=name,hIndex,citationCount,paperCount,url"
     );
-    let resp: S2AuthorSearchResp = s2_json(client, &path).await?;
+    let resp: S2AuthorSearchResp = s2_json(client, &format!("{S2_API}{path}")).await?;
     // s2 returns fragmented profiles — pick the one with the most citations
     let author = resp
         .data
@@ -382,7 +318,7 @@ pub async fn fetch_author_papers(
     let path = format!(
         "/author/{author_id}/papers?fields=title,year,citationCount,externalIds,authors&limit={limit}&offset=0"
     );
-    let resp: S2AuthorPapersResp = s2_json(client, &path).await?;
+    let resp: S2AuthorPapersResp = s2_json(client, &format!("{S2_API}{path}")).await?;
     Ok(resp
         .data
         .into_iter()

@@ -4,6 +4,7 @@ mod display;
 mod hf;
 mod html;
 mod openalex;
+mod retry;
 mod scholar;
 mod text;
 mod types;

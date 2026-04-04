@@ -240,7 +240,7 @@ async fn main() {
             let err = serde_json::json!({ "error": format!("{:#}", e) });
             println!(
                 "{}",
-                serde_json::to_string_pretty(&err).unwrap_or_else(|_| format!("{{\"error\":\"{e:#}\"}}"))
+                serde_json::to_string_pretty(&err).expect("json Value is always serializable")
             );
         } else {
             eprintln!("error: {e:#}");

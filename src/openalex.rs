@@ -22,12 +22,9 @@ struct OaOpenAccess {
 }
 
 #[derive(Deserialize)]
-#[allow(dead_code)]
 struct OaPrimaryTopic {
     display_name: Option<String>,
     subfield: Option<OaNamedEntity>,
-    field: Option<OaNamedEntity>,
-    domain: Option<OaNamedEntity>,
 }
 
 #[derive(Deserialize)]
@@ -65,9 +62,7 @@ struct OaAuthor {
 }
 
 #[derive(Deserialize)]
-#[allow(dead_code)]
 struct OaIds {
-    openalex: Option<String>,
     doi: Option<String>,
 }
 

@@ -160,8 +160,6 @@ pub struct ApiSearchHit {
     #[serde(rename = "paperId")]
     pub paper_id: String,
     pub title: String,
-    #[allow(dead_code)]
-    pub snippet: Option<String>,
 }
 
 #[derive(Deserialize)]

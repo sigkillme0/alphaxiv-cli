@@ -82,8 +82,6 @@ struct S2Author {
 
 #[derive(Deserialize)]
 struct S2PaperDetail {
-    #[serde(rename = "paperId")]
-    paper_id: Option<String>,
     title: Option<String>,
     year: Option<u32>,
     #[serde(rename = "citationCount")]
@@ -145,7 +143,6 @@ fn extract_arxiv_id(external_ids: Option<&HashMap<String, serde_json::Value>>) -
 }
 
 fn detail_to_paper(detail: S2PaperDetail) -> Option<ScholarPaper> {
-    detail.paper_id.as_ref()?;
     let title = detail.title?;
     if title.is_empty() {
         return None;

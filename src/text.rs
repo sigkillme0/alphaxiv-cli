@@ -503,22 +503,14 @@ pub fn normalize_ws(s: &str) -> String {
 
 // ── clean text pipelines ────────────────────────────────────────────────────
 
-pub fn clean_comment(text: &str, raw: bool) -> String {
-    if raw {
-        decode_html_entities(text)
-    } else {
-        let s = strip_html_tags(text);
-        let s = strip_md_escapes(&s);
-        decode_html_entities(&s)
-    }
+pub fn clean_comment(text: &str) -> String {
+    let s = strip_html_tags(text);
+    let s = strip_md_escapes(&s);
+    decode_html_entities(&s)
 }
 
-pub fn clean_overview(text: &str, raw: bool) -> String {
-    if raw {
-        decode_html_entities(text)
-    } else {
-        let s = strip_md_images(text);
-        let s = strip_md_formatting(&s);
-        decode_html_entities(&s)
-    }
+pub fn clean_overview(text: &str) -> String {
+    let s = strip_md_images(text);
+    let s = strip_md_formatting(&s);
+    decode_html_entities(&s)
 }

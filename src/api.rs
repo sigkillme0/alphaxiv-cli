@@ -1,6 +1,6 @@
 use crate::text::{
-    clean_comment, clean_overview, extract_paper_id, format_date, normalize_ws, sanitize_bibtex,
-    urlencode,
+    clean_comment, clean_overview, decode_html_entities, extract_paper_id, format_date,
+    normalize_ws, sanitize_bibtex, urlencode,
 };
 use crate::types::{
     ApiFeedResp, ApiOverviewResp, ApiPaperResp, ApiSearchHit, BatchEntry, CommentOut, FeedEntry,
@@ -113,7 +113,7 @@ impl ApiClient {
         let overview = if want_overview {
             self.fetch_overview(&resp.paper.paper_version.id)
                 .await
-                .map(|txt| clean_overview(&txt, raw))
+                .map(|txt| if raw { decode_html_entities(&txt) } else { clean_overview(&txt) })
         } else {
             None
         };
@@ -513,7 +513,7 @@ fn process_comments(raw: Vec<crate::types::ApiComment>, raw_text: bool) -> Vec<C
                     ReplyOut {
                         author: rauthor,
                         date: r.date.as_deref().map(format_date),
-                        text: clean_comment(&r.body, raw_text),
+                        text: if raw_text { decode_html_entities(&r.body) } else { clean_comment(&r.body) },
                         upvotes: r.upvotes,
                     }
                 })
@@ -525,7 +525,7 @@ fn process_comments(raw: Vec<crate::types::ApiComment>, raw_text: bool) -> Vec<C
                 author,
                 date,
                 title,
-                text: clean_comment(&c.body, raw_text),
+                text: if raw_text { decode_html_entities(&c.body) } else { clean_comment(&c.body) },
                 upvotes: c.upvotes,
                 context,
                 replies,

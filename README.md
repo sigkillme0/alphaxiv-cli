@@ -33,6 +33,11 @@ alphaxiv paper "https://doi.org/10.48550/arXiv.1706.03762"
 
 This hits five APIs at once (alphaxiv, Semantic Scholar, HuggingFace, OpenAlex, and arxiv itself) and gives you everything back in one shot. Abstract, authors, bibtex, citation counts, TLDR, DOI, journal info, open access status, retraction warnings, associated HuggingFace models and datasets, comments, github repos. Add `--overview` if you also want the alphaxiv blog post about the paper.
 
+If any enrichment API is down or rate-limited, you'll see a warning on stderr instead of silently missing data:
+```
+warning: semantic scholar: failed after 3 retries: http 429
+```
+
 **Read the full text:**
 ```bash
 alphaxiv read 1706.03762
@@ -98,7 +103,7 @@ alphaxiv paper 1706.03762 --bibtex
 
 ## Output modes
 
-**JSON** — add `--json` to any command. The schema is stable — every field shows up every time, even when empty. Errors come back as `{"error": "..."}` with exit code 1.
+**JSON** — add `--json` to any command. The schema is stable — every field shows up every time, even when empty. Errors come back as `{"error": "..."}` with exit code 1. Paper lookups include a `warnings` array for any enrichment API failures.
 
 ```bash
 alphaxiv paper 2502.11089 --json

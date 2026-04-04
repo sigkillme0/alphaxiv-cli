@@ -3,6 +3,8 @@ use reqwest::Client;
 use scraper::{ElementRef, Html, Selector};
 use serde::Serialize;
 
+use crate::text::normalize_ws;
+
 // ── output types ────────────────────────────────────────────────────────────
 
 #[derive(Serialize)]
@@ -457,8 +459,4 @@ fn collect_text_skip_tags(el: &ElementRef, out: &mut String) {
             _ => {}
         }
     }
-}
-
-fn normalize_ws(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ")
 }

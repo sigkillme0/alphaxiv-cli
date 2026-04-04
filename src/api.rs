@@ -190,11 +190,7 @@ impl ApiClient {
             .collect();
         let pdf_url = resp.paper.pdf_info.and_then(|pi| pi.fetcher_url);
 
-        let authors: Vec<String> = if api_authors.is_empty() {
-            g.authors.clone()
-        } else {
-            api_authors.into_iter().map(|a| a.full_name).collect()
-        };
+        let authors = resolve_authors(api_authors, g.authors.clone());
 
         let views = g
             .metrics
@@ -244,11 +240,10 @@ impl ApiClient {
             .and_then(|c| c.bibtex)
             .map(|b| sanitize_bibtex(&b));
 
-        let date = g
-            .first_publication_date
-            .as_deref()
-            .or(v.publication_date.as_deref())
-            .map(format_date);
+        let date = resolve_date(
+            g.first_publication_date.as_deref(),
+            v.publication_date.as_deref(),
+        );
 
         let version = v.version_label;
         let upid = v.universal_paper_id.as_deref().unwrap_or(&id);
@@ -405,28 +400,14 @@ impl ApiClient {
                                         } else {
                                             Some(resp.paper.paper_version.abstract_text)
                                         };
-                                    let authors: Vec<String> =
-                                        if resp.paper.authors.is_empty() {
-                                            resp.paper.paper_group.authors
-                                        } else {
-                                            resp.paper
-                                                .authors
-                                                .into_iter()
-                                                .map(|a| a.full_name)
-                                                .collect()
-                                        };
-                                    let date = resp
-                                        .paper
-                                        .paper_group
-                                        .first_publication_date
-                                        .as_deref()
-                                        .or(
-                                            resp.paper
-                                                .paper_version
-                                                .publication_date
-                                                .as_deref(),
-                                        )
-                                        .map(format_date);
+                                    let authors = resolve_authors(
+                                        resp.paper.authors,
+                                        resp.paper.paper_group.authors,
+                                    );
+                                    let date = resolve_date(
+                                        resp.paper.paper_group.first_publication_date.as_deref(),
+                                        resp.paper.paper_version.publication_date.as_deref(),
+                                    );
                                     (abs, authors, date)
                                 }
                                 Err(_) => (None, Vec::new(), None),
@@ -485,6 +466,23 @@ impl ApiClient {
         }
         results
     }
+}
+
+// ── helpers ─────────────────────────────────────────────────────────────────
+
+fn resolve_authors(api_authors: Vec<crate::types::ApiPaperAuthor>, group_authors: Vec<String>) -> Vec<String> {
+    if api_authors.is_empty() {
+        group_authors
+    } else {
+        api_authors.into_iter().map(|a| a.full_name).collect()
+    }
+}
+
+fn resolve_date(
+    group_date: Option<&str>,
+    version_date: Option<&str>,
+) -> Option<String> {
+    group_date.or(version_date).map(crate::text::format_date)
 }
 
 // ── comment processing ──────────────────────────────────────────────────────

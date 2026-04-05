@@ -401,7 +401,20 @@ async fn run(cli: Cli) -> Result<()> {
         }
         Cmd::Refs { id } => {
             let clean_id = text::extract_paper_id(&id);
-            let refs = scholar::fetch_references(&client.client, &clean_id).await?;
+            let mut refs = scholar::fetch_references(&client.client, &clean_id)
+                .await
+                .unwrap_or_default();
+            if refs.is_empty() {
+                if let Ok(bib) = html::fetch_bibliography(&client.client, &clean_id).await {
+                    if !bib.is_empty() {
+                        eprintln!(
+                            "{}",
+                            t.warn.style("note: references from paper HTML (not yet indexed by semantic scholar)")
+                        );
+                        refs = bib;
+                    }
+                }
+            }
             if cli.ids {
                 for r in &refs {
                     if let Some(ref arxiv_id) = r.arxiv_id {

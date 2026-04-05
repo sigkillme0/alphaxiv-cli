@@ -141,7 +141,7 @@ impl ApiClient {
         let mut warnings: Vec<String> = Vec::new();
 
         let scholar = scholar_result.unwrap_or_else(|e| {
-            warnings.push(format!("semantic scholar: {e:#}"));
+            warnings.push(format!("{e:#}"));
             crate::scholar::ScholarMeta {
                 tldr: None,
                 citation_count: None,
@@ -159,7 +159,7 @@ impl ApiClient {
             }
         });
         let oa = oa_result.unwrap_or_else(|e| {
-            warnings.push(format!("openalex: {e:#}"));
+            warnings.push(format!("{e:#}"));
             crate::openalex::OaEnrichment {
                 is_retracted: false,
                 oa_status: None,
@@ -168,7 +168,7 @@ impl ApiClient {
             }
         });
         let hf = hf_result.unwrap_or_else(|e| {
-            warnings.push(format!("huggingface: {e:#}"));
+            warnings.push(format!("{e:#}"));
             crate::hf::HfEnrichment {
                 upvotes: None,
                 github_url: None,

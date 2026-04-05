@@ -217,23 +217,24 @@ impl ApiClient {
             .unwrap_or(comments.len() as u32);
         let reply_count: usize = comments.iter().map(|c| c.replies.len()).sum();
 
-        let github = g
-            .resources
-            .and_then(|r| r.github)
-            .and_then(|gh| {
-                gh.url.map(|url| GithubOut {
-                    url,
-                    stars: gh.stars,
-                    language: gh.language,
-                })
-            })
-            .or_else(|| {
-                hf.github_url.as_ref().map(|url| GithubOut {
-                    url: url.clone(),
-                    stars: hf.github_stars,
-                    language: None,
-                })
+        let github = {
+            let axiv_gh = g
+                .resources
+                .and_then(|r| r.github)
+                .and_then(|gh| {
+                    gh.url.map(|url| GithubOut {
+                        url,
+                        stars: gh.stars,
+                        language: gh.language,
+                    })
+                });
+            let hf_gh = hf.github_url.as_ref().map(|url| GithubOut {
+                url: url.clone(),
+                stars: hf.github_stars,
+                language: None,
             });
+            pick_best_github(axiv_gh, hf_gh)
+        };
 
         let bibtex = g
             .citation
@@ -469,6 +470,35 @@ impl ApiClient {
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────────
+
+/// When both alphaxiv and `HuggingFace` provide a GitHub URL, prefer the one
+/// that actually points to source code rather than a project homepage.
+fn pick_best_github(a: Option<GithubOut>, b: Option<GithubOut>) -> Option<GithubOut> {
+    match (a, b) {
+        (Some(a), Some(b)) => {
+            if is_likely_homepage(&a) && !is_likely_homepage(&b) {
+                Some(b)
+            } else {
+                Some(a)
+            }
+        }
+        (a, b) => a.or(b),
+    }
+}
+
+fn is_likely_homepage(gh: &GithubOut) -> bool {
+    if gh.language.as_deref().is_some_and(|l| l.eq_ignore_ascii_case("HTML")) {
+        return true;
+    }
+    let url = gh.url.trim_end_matches('/').to_lowercase();
+    url.ends_with("-homepage")
+        || url.ends_with("-website")
+        || url.ends_with("-site")
+        || url.ends_with("-page")
+        || url.ends_with("-pages")
+        || url.ends_with("-docs")
+        || url.ends_with("-landing")
+}
 
 fn resolve_authors(api_authors: Vec<crate::types::ApiPaperAuthor>, group_authors: Vec<String>) -> Vec<String> {
     if api_authors.is_empty() {

@@ -25,7 +25,7 @@ impl ApiClient {
     pub fn new() -> Result<Self> {
         let client = Client::builder()
             .timeout(Duration::from_secs(TIMEOUT_SECS))
-            .user_agent("alphaxiv-cli/0.5.1")
+            .user_agent("alphaxiv-cli/0.5.2")
             .build()
             .context("building http client")?;
         Ok(Self { client })

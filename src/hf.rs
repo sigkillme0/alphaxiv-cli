@@ -15,6 +15,12 @@ struct PaperResp {
     github_repo: Option<String>,
     #[serde(rename = "githubStars")]
     github_stars: Option<u64>,
+    organization: Option<PaperOrg>,
+}
+
+#[derive(Deserialize)]
+struct PaperOrg {
+    name: String,
 }
 
 #[derive(Deserialize)]
@@ -86,10 +92,24 @@ async fn hf_json<T: serde::de::DeserializeOwned>(client: &Client, url: &str) -> 
     serde_json::from_str(&body).context("parsing hf response")
 }
 
+/// Extracts the repository name from a GitHub URL (last path segment, ≥3 chars).
+fn repo_name_from_url(url: &str) -> Option<&str> {
+    let path = url
+        .strip_prefix("https://github.com/")
+        .or_else(|| url.strip_prefix("http://github.com/"))?;
+    let name = path.split('/').nth(1)?.split('#').next()?;
+    let name = name.strip_suffix(".git").unwrap_or(name);
+    if name.len() >= 3 {
+        Some(name)
+    } else {
+        None
+    }
+}
+
 // ── public api ──────────────────────────────────────────────────────────────
 
 pub async fn fetch_hf_enrichment(client: &Client, paper_id: &str) -> Result<HfEnrichment> {
-    let (paper, models_raw, datasets_raw, spaces_raw) = tokio::join!(
+    let (paper, mut models_raw, mut datasets_raw, mut spaces_raw) = tokio::join!(
         async { hf_json::<PaperResp>(client, &format!("{HF_API}/papers/{paper_id}")).await.ok() },
         async {
             hf_json::<Vec<ModelResp>>(
@@ -122,6 +142,56 @@ pub async fn fetch_hf_enrichment(client: &Client, paper_id: &str) -> Result<HfEn
             .unwrap_or_default()
         },
     );
+
+    // Fallback: when the arxiv tag filter finds nothing, try searching by the
+    // HF organization namespace + GitHub repo name.  The /papers/ endpoint
+    // already tells us the org (if claimed) and the GitHub URL.
+    if models_raw.is_empty() && datasets_raw.is_empty() && spaces_raw.is_empty() {
+        if let Some(ref p) = paper {
+            if let (Some(org), Some(repo)) = (
+                p.organization.as_ref().map(|o| o.name.as_str()),
+                p.github_repo.as_deref().and_then(repo_name_from_url),
+            ) {
+                let org = crate::text::urlencode(org);
+                let repo = crate::text::urlencode(repo);
+                let (fb_m, fb_d, fb_s) = tokio::join!(
+                    async {
+                        hf_json::<Vec<ModelResp>>(
+                            client,
+                            &format!(
+                                "{HF_API}/models?author={org}&search={repo}&sort=likes&direction=-1&limit={LIMIT}"
+                            ),
+                        )
+                        .await
+                        .unwrap_or_default()
+                    },
+                    async {
+                        hf_json::<Vec<DatasetResp>>(
+                            client,
+                            &format!(
+                                "{HF_API}/datasets?author={org}&search={repo}&sort=likes&direction=-1&limit={LIMIT}"
+                            ),
+                        )
+                        .await
+                        .unwrap_or_default()
+                    },
+                    async {
+                        hf_json::<Vec<SpaceResp>>(
+                            client,
+                            &format!(
+                                "{HF_API}/spaces?author={org}&search={repo}&sort=likes&direction=-1&limit={LIMIT}"
+                            ),
+                        )
+                        .await
+                        .unwrap_or_default()
+                    },
+                );
+                models_raw = fb_m;
+                datasets_raw = fb_d;
+                spaces_raw = fb_s;
+            }
+        }
+    }
 
     let (upvotes, github_url, github_stars) = match paper {
         Some(p) => (p.upvotes, p.github_repo, p.github_stars),

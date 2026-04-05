@@ -135,6 +135,18 @@ async fn s2_json<T: serde::de::DeserializeOwned>(client: &Client, url: &str) -> 
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
+/// Extracts the YYMM submission prefix from a new-style arxiv ID (e.g. "2505" from "2505.18499").
+/// Returns `None` for old-style IDs like "hep-th/9905111".
+fn arxiv_yymm(id: &str) -> Option<&str> {
+    let dot = id.find('.')?;
+    let prefix = &id[..dot];
+    if prefix.len() == 4 && prefix.bytes().all(|b| b.is_ascii_digit()) {
+        Some(prefix)
+    } else {
+        None
+    }
+}
+
 fn extract_arxiv_id(external_ids: Option<&HashMap<String, serde_json::Value>>) -> Option<String> {
     external_ids?
         .get("ArXiv")?
@@ -226,10 +238,21 @@ pub async fn fetch_references(client: &Client, paper_id: &str) -> Result<Vec<Sch
         "/paper/ArXiv:{paper_id}/references?fields=title,year,citationCount,externalIds,authors&limit=100"
     );
     let resp: S2ReferencesResp = s2_json(client, &format!("{S2_API}{path}")).await?;
+    let target_yymm = arxiv_yymm(paper_id);
     Ok(resp
         .data
         .into_iter()
         .filter_map(|entry| detail_to_paper(entry.cited_paper))
+        .filter(|p| {
+            // S2 extracts refs from the latest arxiv revision, but records the
+            // original submission date.  Papers added in a revision can appear
+            // as "references" despite being submitted after the target paper.
+            // Drop any reference whose arxiv YYMM prefix is strictly later.
+            match (target_yymm, p.arxiv_id.as_deref().and_then(arxiv_yymm)) {
+                (Some(t), Some(r)) => r <= t,
+                _ => true,
+            }
+        })
         .collect())
 }
 

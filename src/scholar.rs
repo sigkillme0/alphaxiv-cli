@@ -115,6 +115,7 @@ struct S2RecommendationsResp {
 #[derive(Deserialize)]
 struct S2ReferencesResp {
     data: Vec<S2ReferenceEntry>,
+    next: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -234,26 +235,34 @@ pub async fn fetch_scholar_meta(client: &Client, paper_id: &str) -> Result<Schol
 }
 
 pub async fn fetch_references(client: &Client, paper_id: &str) -> Result<Vec<ScholarPaper>> {
-    let path = format!(
-        "/paper/ArXiv:{paper_id}/references?fields=title,year,citationCount,externalIds,authors&limit=100"
-    );
-    let resp: S2ReferencesResp = s2_json(client, &format!("{S2_API}{path}")).await?;
+    let fields = "title,year,citationCount,externalIds,authors";
     let target_yymm = arxiv_yymm(paper_id);
-    Ok(resp
-        .data
-        .into_iter()
-        .filter_map(|entry| detail_to_paper(entry.cited_paper))
-        .filter(|p| {
-            // S2 extracts refs from the latest arxiv revision, but records the
-            // original submission date.  Papers added in a revision can appear
-            // as "references" despite being submitted after the target paper.
-            // Drop any reference whose arxiv YYMM prefix is strictly later.
-            match (target_yymm, p.arxiv_id.as_deref().and_then(arxiv_yymm)) {
-                (Some(t), Some(r)) => r <= t,
-                _ => true,
-            }
-        })
-        .collect())
+    let mut all = Vec::new();
+    let mut offset: u64 = 0;
+    loop {
+        let path = format!(
+            "/paper/ArXiv:{paper_id}/references?fields={fields}&limit=1000&offset={offset}"
+        );
+        let resp: S2ReferencesResp = s2_json(client, &format!("{S2_API}{path}")).await?;
+        // S2 extracts refs from the latest arxiv revision, but records the
+        // original submission date.  Papers added in a revision can appear
+        // as "references" despite being submitted after the target paper.
+        // Drop any reference whose arxiv YYMM prefix is strictly later.
+        all.extend(
+            resp.data
+                .into_iter()
+                .filter_map(|entry| detail_to_paper(entry.cited_paper))
+                .filter(|p| match (target_yymm, p.arxiv_id.as_deref().and_then(arxiv_yymm)) {
+                    (Some(t), Some(r)) => r <= t,
+                    _ => true,
+                }),
+        );
+        match resp.next {
+            Some(n) => offset = n,
+            None => break,
+        }
+    }
+    Ok(all)
 }
 
 pub async fn fetch_citations(

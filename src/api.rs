@@ -472,32 +472,17 @@ impl ApiClient {
 // ── helpers ─────────────────────────────────────────────────────────────────
 
 /// When both alphaxiv and `HuggingFace` provide a GitHub URL, prefer the one
-/// that actually points to source code rather than a project homepage.
+/// that isn't an HTML project page.  `language == "HTML"` on GitHub is a
+/// reliable signal — no real code repo has HTML as its primary language.
 fn pick_best_github(a: Option<GithubOut>, b: Option<GithubOut>) -> Option<GithubOut> {
     match (a, b) {
         (Some(a), Some(b)) => {
-            if is_likely_homepage(&a) && !is_likely_homepage(&b) {
-                Some(b)
-            } else {
-                Some(a)
-            }
+            let a_html = a.language.as_deref().is_some_and(|l| l.eq_ignore_ascii_case("HTML"));
+            let b_html = b.language.as_deref().is_some_and(|l| l.eq_ignore_ascii_case("HTML"));
+            if a_html && !b_html { Some(b) } else { Some(a) }
         }
         (a, b) => a.or(b),
     }
-}
-
-fn is_likely_homepage(gh: &GithubOut) -> bool {
-    if gh.language.as_deref().is_some_and(|l| l.eq_ignore_ascii_case("HTML")) {
-        return true;
-    }
-    let url = gh.url.trim_end_matches('/').to_lowercase();
-    url.ends_with("-homepage")
-        || url.ends_with("-website")
-        || url.ends_with("-site")
-        || url.ends_with("-page")
-        || url.ends_with("-pages")
-        || url.ends_with("-docs")
-        || url.ends_with("-landing")
 }
 
 fn resolve_authors(api_authors: Vec<crate::types::ApiPaperAuthor>, group_authors: Vec<String>) -> Vec<String> {

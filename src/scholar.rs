@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -217,7 +217,7 @@ pub async fn fetch_scholar_meta(client: &Client, paper_id: &str) -> Result<Schol
         .and_then(|v| v.as_str())
         .map(str::to_string);
     let oa = meta.open_access_pdf.as_ref();
-    Ok(ScholarMeta {
+    let result = ScholarMeta {
         tldr: meta.tldr.map(|t| t.text),
         citation_count: meta.citation_count,
         influential_citation_count: meta.influential_citation_count,
@@ -231,7 +231,14 @@ pub async fn fetch_scholar_meta(client: &Client, paper_id: &str) -> Result<Schol
         fields_of_study: meta.fields_of_study.unwrap_or_default(),
         open_access_url: oa.and_then(|p| p.url.clone()).filter(|u| !u.is_empty()),
         open_access_license: oa.and_then(|p| p.license.clone()),
-    })
+    };
+    // S2 sometimes returns 200 with null counts — degraded response from
+    // soft rate limiting.  For a known paper these should always be at least 0.
+    // Treat as error so the caller's warning machinery surfaces it.
+    if result.citation_count.is_none() && result.reference_count.is_none() {
+        bail!("semantic scholar: returned empty metadata (possible rate limiting)");
+    }
+    Ok(result)
 }
 
 pub async fn fetch_references(client: &Client, paper_id: &str) -> Result<Vec<ScholarPaper>> {

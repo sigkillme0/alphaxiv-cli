@@ -29,6 +29,93 @@ pub async fn fetch_paper_content(client: &Client, paper_id: &str) -> Result<Pape
     parse_paper(&raw_html, paper_id)
 }
 
+/// Parse structured references from the paper's HTML bibliography.
+/// Used when Semantic Scholar has no reference data for a paper.
+pub async fn fetch_bibliography(
+    client: &Client,
+    paper_id: &str,
+) -> Result<Vec<crate::scholar::ScholarPaper>> {
+    let url = format!("https://arxiv.org/html/{paper_id}");
+    let raw_html = get_html(client, &url).await?;
+    Ok(parse_bibliography(&raw_html))
+}
+
+fn parse_bibliography(raw_html: &str) -> Vec<crate::scholar::ScholarPaper> {
+    let doc = Html::parse_document(raw_html);
+    let sel_bib = Selector::parse("section.ltx_bibliography").expect("bib selector");
+    let sel_item = Selector::parse("li.ltx_bibitem").expect("bibitem selector");
+    let sel_title = Selector::parse("span.ltx_bib_title").expect("bib title selector");
+    let sel_refnum = Selector::parse("span.ltx_role_refnum").expect("refnum selector");
+
+    let Some(bib_el) = doc.select(&sel_bib).next() else {
+        return Vec::new();
+    };
+
+    let mut refs = Vec::new();
+    for item in bib_el.select(&sel_item) {
+        let title = match item.select(&sel_title).next() {
+            Some(el) => normalize_ws(&el.text().collect::<String>()),
+            None => continue,
+        };
+        if title.is_empty() {
+            continue;
+        }
+        let (authors, year) = item
+            .select(&sel_refnum)
+            .next()
+            .map(|el| parse_author_year(&el.text().collect::<String>()))
+            .unwrap_or_default();
+        let full_text: String = item.text().collect();
+        let arxiv_id = extract_arxiv_from_bib(&full_text);
+        refs.push(crate::scholar::ScholarPaper {
+            title,
+            arxiv_id,
+            year,
+            citation_count: None,
+            authors,
+            contexts: Vec::new(),
+        });
+    }
+    refs
+}
+
+fn parse_author_year(text: &str) -> (Vec<String>, Option<u32>) {
+    let text = text.trim();
+    let (author_part, year) = match text.rfind('(') {
+        Some(pos) => {
+            let after = text[pos + 1..].trim_end_matches(')').trim();
+            if after.len() == 4 && after.bytes().all(|b| b.is_ascii_digit()) {
+                (&text[..pos], after.parse::<u32>().ok())
+            } else {
+                (text, None)
+            }
+        }
+        None => (text, None),
+    };
+    let authors: Vec<String> = author_part
+        .split(", ")
+        .flat_map(|s| s.split(" and "))
+        .map(|s| s.trim().trim_start_matches("and ").trim().to_string())
+        .filter(|s| !s.is_empty() && s != "et al.")
+        .collect();
+    (authors, year)
+}
+
+fn extract_arxiv_from_bib(text: &str) -> Option<String> {
+    let pos = text.find("arXiv:")?;
+    let after = &text[pos + 6..];
+    let id: String = after
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    let id = id.trim_end_matches('.');
+    if id.contains('.') && id.len() >= 9 {
+        Some(id.to_string())
+    } else {
+        None
+    }
+}
+
 // ── http fetch with retries ─────────────────────────────────────────────────
 
 async fn get_html(client: &Client, url: &str) -> Result<String> {

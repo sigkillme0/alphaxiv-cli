@@ -13,7 +13,7 @@ use std::time::Duration;
 
 const API: &str = "https://api.alphaxiv.org";
 pub const SITE: &str = "https://www.alphaxiv.org";
-const TIMEOUT_SECS: u64 = 30;
+const TIMEOUT_SECS: u64 = 90;
 const MAX_CONCURRENT: usize = 8;
 
 #[derive(Clone)]
